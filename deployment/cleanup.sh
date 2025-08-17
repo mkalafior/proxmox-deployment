@@ -5,6 +5,11 @@
 
 set -euo pipefail
 
+# Configuration
+TUNNEL_NAME="${TUNNEL_NAME:-proxmox-main}"
+APP_SUBDOMAIN="${APP_SUBDOMAIN:-app}"
+SSH_KEY_PATH="$HOME/.ssh/id_proxmox"
+
 # Colors for output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -66,6 +71,9 @@ echo "🗑️  This will remove the following resources:"
 echo "   • Proxmox Container: hello-world-bun-app (VM ID: ${VM_ID:-200})"
 echo "   • All application data and logs"
 echo "   • Local deployment files (vm_ip.txt)"
+if [[ -n "${CLOUDFLARE_DOMAIN:-}" ]]; then
+    echo "   • Cloudflare tunnel route: ${APP_SUBDOMAIN}.${CLOUDFLARE_DOMAIN}"
+fi
 echo ""
 
 # Get VM IP if available
@@ -99,6 +107,40 @@ if [[ -n "$VM_IP" ]] && [[ -f "$HOME/.ssh/id_proxmox" ]]; then
         2>/dev/null || echo "   (Service stop failed or VM not accessible)"
 fi
 
+# Clean up Cloudflare tunnel routing (if configured)
+if [[ -n "${CLOUDFLARE_DOMAIN:-}" ]]; then
+    echo "   Removing Cloudflare tunnel route..."
+    if ssh -i "${SSH_KEY_PATH}" -o ConnectTimeout=5 -o BatchMode=yes root@${PROXMOX_HOST} \
+        "cloudflared tunnel route dns --overwrite-dns ${TUNNEL_NAME} ${APP_SUBDOMAIN}.${CLOUDFLARE_DOMAIN}" 2>/dev/null; then
+        echo "   ✅ Removed Cloudflare DNS route"
+    else
+        echo "   (Could not remove Cloudflare route - may not exist or SSH failed)"
+    fi
+    
+    # Update tunnel config to remove app routing
+    if ssh -i "${SSH_KEY_PATH}" -o ConnectTimeout=5 -o BatchMode=yes root@${PROXMOX_HOST} \
+        "test -f /etc/cloudflared/config.yml" 2>/dev/null; then
+        echo "   Updating tunnel configuration..."
+        ssh -i "${SSH_KEY_PATH}" root@${PROXMOX_HOST} "
+        # Get tunnel UUID
+        TUNNEL_UUID=\$(cloudflared tunnel list | grep '${TUNNEL_NAME}' | awk '{print \$1}')
+        
+        # Create minimal config without app routing
+        cat > /etc/cloudflared/config.yml << EOF
+tunnel: \$TUNNEL_UUID
+credentials-file: /root/.cloudflared/\$TUNNEL_UUID.json
+
+ingress:
+  # Catch-all rule (required)
+  - service: http_status:404
+EOF
+        
+        # Restart cloudflared
+        systemctl restart cloudflared
+        " && echo "   ✅ Updated tunnel configuration" || echo "   (Could not update tunnel config)"
+    fi
+fi
+
 # Delete the Proxmox container
 echo "   Deleting Proxmox container..."
 ansible localhost -m community.general.proxmox \
@@ -122,6 +164,6 @@ echo ""
 echo "✅ Cleanup completed successfully!"
 echo ""
 echo "🚀 To deploy again, run:"
-echo "   ./deploy.sh"
+echo "   ./deploy-and-expose.sh"
 echo ""
 echo "💡 The dedicated Proxmox SSH key ($HOME/.ssh/id_proxmox) has been preserved for future deployments."

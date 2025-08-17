@@ -7,3 +7,5 @@ collections:
     version: ">=2.0.0"
   - name: ansible.posix
     version: ">=1.0.0"
+  - name: community.proxmox
+    version: ">=1.0.0"
