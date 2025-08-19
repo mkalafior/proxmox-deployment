@@ -1,11 +1,11 @@
 # Proxmox Hello World App - Simplified Deployment
 
-🚀 **One-command deployment with automatic Cloudflare exposure**
+🚀 **One-command deployment with optional Cloudflare exposure**
 
 This deployment system automatically:
 - Deploys your Bun application to Proxmox LXC container
-- Configures Cloudflare tunnel routing
-- Exposes your app publicly with zero manual steps
+- Optionally configures Cloudflare tunnel routing for public access
+- Supports both internal-only and public deployments
 - Uses SSH key authentication (no password prompts)
 
 ## 📋 Prerequisites
@@ -28,7 +28,8 @@ export TOKEN_SECRET="your_token_secret"
 export VM_ID="200"
 export VM_TEMPLATE="local:vztmpl/ubuntu-24.04-standard_24.04-2_amd64.tar.zst"
 
-# Cloudflare Configuration
+# Cloudflare Configuration (Optional - for public access)
+# Leave these unset for internal-only deployment
 export CLOUDFLARE_DOMAIN="yourdomain.com"
 export APP_SUBDOMAIN="app"
 ```
@@ -37,10 +38,34 @@ export APP_SUBDOMAIN="app"
 - **Ansible**: `brew install ansible` (macOS) or `apt install ansible` (Ubuntu)
 - **SSH Key**: Dedicated Proxmox SSH key at `~/.ssh/id_proxmox`
 
-### 3. Cloudflare Tunnel
-Ensure Cloudflare tunnel is already set up on your Proxmox server with tunnel name `proxmox-main`.
+### 3. Cloudflare Tunnel (Optional)
+If you want public access, ensure Cloudflare tunnel is already set up on your Proxmox server with tunnel name `proxmox-main`.
 
 ## 🚀 Quick Start
+
+### Deployment Options
+
+**Option 1: Internal-Only Deployment**
+```bash
+# Remove or comment out Cloudflare settings in env.proxmox
+# export CLOUDFLARE_DOMAIN="yourdomain.com"
+# export APP_SUBDOMAIN="app"
+
+cd deployment
+./deploy-and-expose.sh
+```
+Your app will be accessible only within your network at `http://VM_IP:3000`
+
+**Option 2: Public Deployment with Cloudflare**
+```bash
+# Set Cloudflare settings in env.proxmox
+export CLOUDFLARE_DOMAIN="yourdomain.com"
+export APP_SUBDOMAIN="app"
+
+cd deployment
+./deploy-and-expose.sh
+```
+Your app will be accessible both internally and publicly at `https://app.yourdomain.com`
 
 ### Initial Deployment
 ```bash
