@@ -3,3 +3,4 @@
 .vscode
 .DS_Store
 node_modules
+deployment/vm_ip.txt
