@@ -1,0 +1,32 @@
+# Service configuration for python-api
+# Generated on Wed Aug 20 09:17:12 CEST 2025
+
+service_name: python-api
+vm_name: python-api
+vm_id: 210
+vm_cores: 2
+vm_memory: 2048
+vm_disk_size: 20
+vm_storage: local-lvm
+vm_network_bridge: vmbr0
+vm_swap: 512
+vm_unprivileged: true
+
+app_name: python-api
+app_user: appuser
+app_dir: /opt/python-api
+app_service_name: python-api
+app_port: 8000
+local_app_path: "../../services/python-api"
+
+service_hostname: python-api
+app_subdomain: python-api
+
+dns_server: 192.168.1.11
+dns_domain: proxmox.local
+
+# Custom environment variables (add as needed)
+custom_env_vars: {}
+
+# Additional ports to open in firewall (add as needed)
+additional_ports: []

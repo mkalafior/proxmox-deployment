@@ -1,0 +1,56 @@
+# Static Site Service Type Configuration
+service_type: static
+runtime_name: "Static Site (Nginx)"
+
+# Runtime installation tasks
+runtime_install:
+  - name: "Install Nginx"
+    apt:
+      name:
+        - nginx
+      state: present
+
+# No dependency installation needed for static sites
+dependency_install:
+  - name: "Configure Nginx for static site"
+    template:
+      src: nginx-static.conf.j2
+      dest: "/etc/nginx/sites-available/{{ service_name }}"
+    notify: restart nginx
+  
+  - name: "Enable Nginx site"
+    file:
+      src: "/etc/nginx/sites-available/{{ service_name }}"
+      dest: "/etc/nginx/sites-enabled/{{ service_name }}"
+      state: link
+    notify: restart nginx
+  
+  - name: "Remove default Nginx site"
+    file:
+      path: "/etc/nginx/sites-enabled/default"
+      state: absent
+    notify: restart nginx
+
+# File exclusions for tar archive
+file_exclusions:
+  - ".git"
+  - "deployment"
+  - "deployments"
+  - "*.log"
+  - ".env"
+  - "node_modules"
+  - "src"  # Only deploy built files
+
+# Default environment variables (minimal for static sites)
+default_env: {}
+
+# Health check endpoint
+health_check_path: "/"
+
+# Default systemd service configuration (uses nginx)
+systemd_service:
+  Type: forking
+  ExecStart: "/usr/sbin/nginx"
+  ExecReload: "/bin/kill -s HUP $MAINPID"
+  Restart: always
+  RestartSec: 5

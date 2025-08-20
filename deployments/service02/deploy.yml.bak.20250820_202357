@@ -1,0 +1,456 @@
+---
+# Deployment playbook for service02 service
+- name: Deploy service02 to Proxmox VE
+  hosts: localhost
+  connection: local
+  gather_facts: true
+  vars_files:
+    - group_vars/all.yml
+  
+  tasks:
+    - name: Validate environment variables
+      assert:
+        that:
+          - proxmox_host is defined and proxmox_host != ""
+          - >
+            (proxmox_token_id is defined and proxmox_token_id != "" and 
+             proxmox_token_secret is defined and proxmox_token_secret != "") or
+            (proxmox_user is defined and proxmox_user != "" and 
+             proxmox_password is defined and proxmox_password != "")
+        fail_msg: |
+          Required Proxmox authentication must be configured.
+          Either set API token (TOKEN_ID, TOKEN_SECRET) or username/password (PROXMOX_USER, PROXMOX_PASSWORD).
+          API tokens are recommended for automation.
+
+    - name: Debug environment variables
+      debug:
+        msg: |
+          Environment Debug for service02:
+          - PROXMOX_HOST: {{ lookup('env', 'PROXMOX_HOST') | default('not set') }}
+          - PROXMOX_USER: {{ lookup('env', 'PROXMOX_USER') | default('not set') }}
+          - PROXMOX_PASSWORD: {{ 'SET' if lookup('env', 'PROXMOX_PASSWORD') != '' else 'not set' }}
+          - TOKEN_ID: {{ lookup('env', 'TOKEN_ID') | default('not set') }}
+          - TOKEN_SECRET: {{ 'SET' if lookup('env', 'TOKEN_SECRET') != '' else 'not set' }}
+          
+          Service Configuration:
+          - Service Name: service02
+          - VM ID: {{ vm_id }}
+          - VM Name: {{ vm_name }}
+          - App Port: {{ app_port }}
+
+    - name: Display authentication method
+      debug:
+        msg: |
+          Using {{ 'API Token' if (proxmox_token_id != '' and proxmox_token_secret != '') else 'Username/Password' }} authentication
+          Token ID: {{ proxmox_token_id if (proxmox_token_id != '') else 'Not configured' }}
+          User: {{ proxmox_user if (proxmox_user != '') else 'Not configured' }}
+
+    - name: Check for SSH public key
+      stat:
+        path: "{{ ssh_public_key_path }}"
+      register: ssh_key_stat
+
+    - name: Generate dedicated Proxmox SSH key if it doesn't exist
+      openssh_keypair:
+        path: "{{ ssh_public_key_path | replace('.pub', '') }}"
+        type: ed25519
+        comment: "proxmox-{{ vm_name }}-{{ ansible_date_time.date }}"
+      when: not ssh_key_stat.stat.exists
+
+    - name: Read SSH public key
+      slurp:
+        src: "{{ ssh_public_key_path }}"
+      register: ssh_public_key_content
+
+    - name: Create Proxmox container via curl command  
+      shell: |
+        curl -k -X POST \
+          -H "Authorization: PVEAPIToken={{ proxmox_token_id }}={{ proxmox_token_secret }}" \
+          -H "Content-Type: application/x-www-form-urlencoded" \
+{% raw %}          -d "vmid={{ vm_id }}&unprivileged=1&features=nesting%3D1&password={{ lookup('password', '/tmp/vm_root_password chars=ascii_letters,digits length=16') }}&ssh-public-keys={{ ssh_public_key_content.content | b64decode | trim | urlencode }}&ostemplate={{ vm_os_template | urlencode }}&rootfs={{ vm_storage }}%3A{{ vm_disk_size }}&cores={{ vm_cores }}&memory={{ vm_memory }}&swap={{ vm_swap }}&net0=name%3Deth0%2Cbridge%3D{{ vm_network_bridge }}%2Cfirewall%3D1%2Cip6%3Ddhcp%2Cip%3Ddhcp" \{% endraw %}
+          "https://{{ proxmox_host }}:8006/api2/json/nodes/{{ proxmox_node }}/lxc"
+      register: proxmox_vm
+      retries: 3
+      delay: 10
+      
+    - name: Debug Proxmox creation failure
+      debug:
+        var: proxmox_vm
+      when: proxmox_vm.failed is defined and proxmox_vm.failed
+
+    - name: Start the container via direct API call
+      uri:
+        url: "https://{{ proxmox_host }}:8006/api2/json/nodes/{{ proxmox_node }}/lxc/{{ vm_id }}/status/start"
+        method: POST
+        headers:
+          Authorization: "PVEAPIToken={{ proxmox_token_id }}={{ proxmox_token_secret }}"
+        validate_certs: "{{ proxmox_api_validate_certs }}"
+        status_code: [200]
+        timeout: 60
+    
+    - name: Wait for container to be fully started
+      pause:
+        seconds: 5
+
+    - name: Wait for container to get IP address
+      pause:
+        seconds: 10
+        
+    - name: Wait for container to get DHCP IP assignment
+      pause:
+        seconds: 15
+
+    - name: Get container network interfaces via Proxmox API (using API token)
+      uri:
+        url: "https://{{ proxmox_host }}:8006/api2/json/nodes/{{ proxmox_node }}/lxc/{{ vm_id }}/interfaces"
+        method: GET
+        headers:
+          Authorization: "PVEAPIToken={{ proxmox_token_id }}={{ proxmox_token_secret }}"
+        validate_certs: "{{ proxmox_api_validate_certs }}"
+        timeout: 30
+        return_content: yes
+        status_code: [200, 401, 403, 500]
+      register: container_interfaces_result
+      when: proxmox_token_id != '' and proxmox_token_secret != ''
+      ignore_errors: true
+
+    - name: Extract container IP from interfaces API response
+      set_fact:
+        container_ip: "{{ eth0_interface.inet | regex_replace('/.*$', '') }}"
+      vars:
+        eth0_interface: "{{ container_interfaces_result.json.data | selectattr('name', 'equalto', 'eth0') | first }}"
+      when:
+        - container_interfaces_result is defined
+        - container_interfaces_result.status == 200
+        - container_interfaces_result.json.data is defined
+        - (container_interfaces_result.json.data | selectattr('name', 'equalto', 'eth0') | list | length > 0)
+      ignore_errors: true
+
+    - name: Manual IP discovery instructions if API methods fail
+      fail:
+        msg: |
+          Could not retrieve IP automatically via Proxmox API.
+          The container is running with DHCP. Please manually get the IP:
+          
+          1. Check Proxmox web interface: https://{{ proxmox_host }}:8006
+          2. Navigate to node {{ proxmox_node }} -> CT {{ vm_id }} -> Summary
+          3. Note the IP address and run: echo 'DISCOVERED_IP' > vm_ip.txt
+          
+          API Debug Info:
+          - Interfaces API: {{ container_interfaces_result.status | default('not attempted') }}
+      when: container_ip is not defined or container_ip == ''
+
+    - name: Debug container info
+      debug:
+        msg: |
+          Container created successfully for service02!
+          VMID: {{ vm_id }}
+          Name: {{ vm_name }}
+          Node: {{ proxmox_node }}
+          IP: {{ container_ip }}
+
+    - name: Wait for SSH to become available with key
+      wait_for:
+        host: "{{ container_ip }}"
+        port: 22
+        delay: 5
+        timeout: 30
+        state: started
+      vars:
+        ansible_python_interpreter: "{{ ansible_playbook_python }}"
+      when: container_ip is defined
+
+    - name: Add container to dynamic inventory
+      add_host:
+        name: "{{ container_ip }}"
+        groups: proxmox_containers
+        ansible_host: "{{ container_ip }}"
+        ansible_user: root
+        ansible_ssh_private_key_file: "{{ ssh_public_key_path | replace('.pub', '') }}"
+        vm_id: "{{ vm_id }}"
+      when: container_ip is defined
+
+    - name: Save container IP to file for future use
+      copy:
+        content: "{{ container_ip }}"
+        dest: "./vm_ip.txt"
+      delegate_to: localhost
+      when: container_ip is defined
+
+- name: Configure container and deploy service02 application
+  hosts: proxmox_containers
+  become: true
+  vars_files:
+    - group_vars/all.yml
+  
+  tasks:
+    - name: Wait for system to be ready
+      wait_for_connection:
+        timeout: 300
+
+    - name: Test internet connectivity
+      uri:
+        url: http://archive.ubuntu.com
+        timeout: 5
+      register: internet_test
+      ignore_errors: true
+
+    - name: Skip package installation if no internet
+      debug:
+        msg: "No internet access - skipping package installation. Run fix-proxmox-networking.sh on Proxmox host."
+      when: internet_test.failed
+
+    - name: Update apt cache
+      apt:
+        update_cache: yes
+        cache_valid_time: 3600
+      when: not internet_test.failed
+
+    - name: Install system packages
+      apt:
+        name:
+          - curl
+          - wget
+          - git
+          - unzip
+          - ufw
+          - build-essential  # For native modules if needed
+          - qemu-guest-agent  # For IP address discovery
+        state: present
+      when: not internet_test.failed
+  
+    - name: Configure firewall
+      ufw:
+        rule: allow
+        port: "{{ item }}"
+      loop: "{{ allowed_ports }}"
+
+    - name: Enable firewall
+      ufw:
+        state: enabled
+
+    - name: Install Bun runtime system-wide
+      shell: |
+        curl -fsSL https://bun.sh/install | bash -s "bun-v1.0.20"
+        cp /root/.bun/bin/bun /usr/local/bin/bun
+        chmod 755 /usr/local/bin/bun
+        chown root:root /usr/local/bin/bun
+      args:
+        creates: /usr/local/bin/bun
+      register: bun_install
+
+    - name: Verify Bun installation
+      command: bun --version
+      register: bun_version
+      changed_when: false
+
+    - name: Display Bun version
+      debug:
+        msg: "Bun version: {{ bun_version.stdout }}"
+
+    - name: Create application user
+      user:
+        name: "{{ app_user }}"
+        system: yes
+        shell: /bin/bash
+        home: "{{ app_dir }}"
+        create_home: yes
+
+    - name: Create application directory
+      file:
+        path: "{{ app_dir }}"
+        state: directory
+        owner: "{{ app_user }}"
+        group: "{{ app_user }}"
+        mode: '0755'
+
+    - name: Copy application files using tar
+      block:
+        - name: Create tar archive of application
+          shell: |
+            cd {{ local_app_path }}
+            tar --exclude='node_modules' \
+                --exclude='.git' \
+                --exclude='deployment' \
+                --exclude='deployments' \
+                --exclude='*.log' \
+                --exclude='.env' \
+                -czf /tmp/service02-app.tar.gz .
+          delegate_to: localhost
+          become: false
+
+        - name: Copy tar archive to container
+          copy:
+            src: "/tmp/service02-app.tar.gz"
+            dest: "/tmp/service02-app.tar.gz"
+            mode: '0644'
+
+        - name: Extract application files
+          unarchive:
+            src: "/tmp/service02-app.tar.gz"
+            dest: "{{ app_dir }}"
+            remote_src: yes
+            owner: "{{ app_user }}"
+            group: "{{ app_user }}"
+
+        - name: Clean up tar files on remote container
+          file:
+            path: "/tmp/service02-app.tar.gz"
+            state: absent
+
+        - name: Clean up tar files on local machine
+          file:
+            path: "/tmp/service02-app.tar.gz"
+            state: absent
+          delegate_to: localhost
+          become: false
+
+    - name: Set ownership of application files
+      file:
+        path: "{{ app_dir }}"
+        owner: "{{ app_user }}"
+        group: "{{ app_user }}"
+        recurse: yes
+
+    - name: Install Bun dependencies
+      shell: |
+        /usr/local/bin/bun install
+      args:
+        chdir: "{{ app_dir }}"
+      become_user: "{{ app_user }}"
+
+    - name: Create environment file
+      template:
+        src: env.j2
+        dest: "{{ app_dir }}/.env"
+        owner: "{{ app_user }}"
+        group: "{{ app_user }}"
+        mode: '0600'
+
+    - name: Create systemd service file
+      template:
+        src: "{{ app_service_name }}.service.j2"
+        dest: "/etc/systemd/system/{{ app_service_name }}.service"
+        mode: '0644'
+      notify: reload systemd
+
+    - name: Enable and start application service
+      systemd:
+        name: "{{ app_service_name }}"
+        enabled: yes
+        state: started
+        daemon_reload: yes
+
+    - name: Wait for service to be running
+      pause:
+        seconds: 5
+
+    - name: Copy DNS authentication key
+      template:
+        src: bind-key.conf.j2
+        dest: /etc/bind-key.conf
+        mode: '0600'
+        owner: root
+        group: root
+
+    - name: Install netcat for DNS connectivity testing
+      apt:
+        name: netcat-openbsd
+        state: present
+      when: not internet_test.failed
+
+    - name: Copy DNS registration script
+      template:
+        src: dns-register.sh.j2
+        dest: /opt/dns-register.sh
+        mode: '0755'
+        owner: root
+        group: root
+
+    - name: Test DNS registration script
+      command: /opt/dns-register.sh test
+      register: dns_test_result
+      ignore_errors: true
+
+    - name: Display DNS test result
+      debug:
+        msg: |
+          DNS Test Result for service02:
+          {{ dns_test_result.stdout }}
+          {% if dns_test_result.stderr %}
+          Errors: {{ dns_test_result.stderr }}
+          {% endif %}
+
+    - name: Create DNS registration service
+      template:
+        src: dns-register.service.j2
+        dest: /etc/systemd/system/dns-register.service
+        mode: '0644'
+      notify: reload systemd
+
+    - name: Enable and start DNS registration service
+      systemd:
+        name: dns-register
+        enabled: yes
+        state: started
+        daemon_reload: yes
+
+    - name: Wait for DNS registration to complete
+      pause:
+        seconds: 3
+
+    - name: Test hostname resolution
+      shell: nslookup {{ service_hostname }}.{{ dns_domain }} {{ dns_server }}
+      register: dns_resolution_test
+      ignore_errors: true
+
+    - name: Display DNS resolution result
+      debug:
+        msg: |
+          DNS Resolution Test for service02:
+          {% if dns_resolution_test.rc == 0 %}
+          ✅ SUCCESS: {{ service_hostname }}.{{ dns_domain }} is resolvable
+          {% else %}
+          ⚠️  WARNING: DNS resolution failed, service accessible by IP only
+          {% endif %}
+
+    - name: Check service status
+      systemd:
+        name: "{{ app_service_name }}"
+      register: service_status
+
+    - name: Display service status
+      debug:
+        msg: |
+          service02 Service Status: {{ service_status.status.ActiveState }}
+          Service is {{ 'running' if service_status.status.ActiveState == 'active' else 'not running' }}
+
+    - name: Test application endpoint
+      uri:
+        url: "http://{{ ansible_host }}:{{ app_port }}/health"
+        method: GET
+        timeout: 10
+      register: health_check
+      ignore_errors: yes
+
+    - name: Display health check result
+      debug:
+        msg: |
+          service02 Health check: {{ 'PASSED' if health_check.status == 200 else 'FAILED' }}
+          {% if health_check.status == 200 %}
+          Application is running at: http://{{ ansible_host }}:{{ app_port }}
+          {% endif %}
+
+    - name: Show recent logs
+      command: journalctl -u {{ app_service_name }} --lines=10 --no-pager
+      register: service_logs
+      changed_when: false
+
+    - name: Display recent logs
+      debug:
+        var: service_logs.stdout_lines
+
+  handlers:
+    - name: reload systemd
+      systemd:
+        daemon_reload: yes

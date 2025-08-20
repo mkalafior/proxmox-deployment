@@ -1,0 +1,65 @@
+# Node.js/Bun.js Service Type Configuration
+service_type: nodejs
+runtime_name: "Node.js/Bun.js"
+
+# Runtime installation tasks
+runtime_install:
+  - name: "Install Node.js runtime"
+    apt:
+      name:
+        - nodejs
+        - npm
+      state: present
+    when: nodejs_runtime == "node"
+  
+  - name: "Install Bun runtime system-wide"
+    shell: |
+      curl -fsSL https://bun.sh/install | bash -s "bun-v1.0.20"
+      cp /root/.bun/bin/bun /usr/local/bin/bun
+      chmod 755 /usr/local/bin/bun
+      chown root:root /usr/local/bin/bun
+    args:
+      creates: /usr/local/bin/bun
+    when: nodejs_runtime == "bun"
+
+# Dependency installation
+dependency_install:
+  - name: "Install dependencies with npm"
+    shell: npm install
+    args:
+      chdir: "{{ app_dir }}"
+    become_user: "{{ app_user }}"
+    when: nodejs_runtime == "node"
+  
+  - name: "Install dependencies with Bun"
+    shell: /usr/local/bin/bun install
+    args:
+      chdir: "{{ app_dir }}"
+    become_user: "{{ app_user }}"
+    when: nodejs_runtime == "bun"
+
+# File exclusions for tar archive
+file_exclusions:
+  - "node_modules"
+  - ".git"
+  - "deployment"
+  - "deployments"
+  - "*.log"
+  - ".env"
+  - ".npm"
+  - "package-lock.json"
+
+# Default environment variables
+default_env:
+  NODE_ENV: production
+  HOST: "0.0.0.0"
+
+# Health check endpoint
+health_check_path: "/health"
+
+# Default systemd service configuration
+systemd_service:
+  Type: simple
+  ExecStart: "{{ '/usr/local/bin/bun' if nodejs_runtime == 'bun' else 'node' }} {{ app_main_file | default('index.js') }}"
+  Restart: always
+  RestartSec: 10

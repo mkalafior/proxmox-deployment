@@ -1,0 +1,87 @@
+# Database Service Type Configuration
+service_type: database
+runtime_name: "Database"
+
+# Runtime installation tasks (supports PostgreSQL, MySQL, Redis, MongoDB)
+runtime_install:
+  - name: "Install PostgreSQL"
+    apt:
+      name:
+        - postgresql
+        - postgresql-contrib
+        - python3-psycopg2
+      state: present
+    when: db_type == "postgresql"
+  
+  - name: "Install MySQL"
+    apt:
+      name:
+        - mysql-server
+        - python3-pymysql
+      state: present
+    when: db_type == "mysql"
+  
+  - name: "Install Redis"
+    apt:
+      name:
+        - redis-server
+      state: present
+    when: db_type == "redis"
+  
+  - name: "Install MongoDB"
+    shell: |
+      wget -qO - https://www.mongodb.org/static/pgp/server-6.0.asc | apt-key add -
+      echo "deb [ arch=amd64,arm64 ] https://repo.mongodb.org/apt/ubuntu jammy/mongodb-org/6.0 multiverse" | tee /etc/apt/sources.list.d/mongodb-org-6.0.list
+      apt-get update
+      apt-get install -y mongodb-org
+    when: db_type == "mongodb"
+
+# Database initialization
+dependency_install:
+  - name: "Initialize PostgreSQL database"
+    postgresql_db:
+      name: "{{ db_name | default(service_name) }}"
+      state: present
+    become_user: postgres
+    when: db_type == "postgresql"
+  
+  - name: "Create PostgreSQL user"
+    postgresql_user:
+      name: "{{ db_user | default(service_name) }}"
+      password: "{{ db_password }}"
+      db: "{{ db_name | default(service_name) }}"
+      priv: ALL
+    become_user: postgres
+    when: db_type == "postgresql"
+  
+  - name: "Configure Redis"
+    lineinfile:
+      path: /etc/redis/redis.conf
+      regexp: '^bind'
+      line: 'bind 0.0.0.0'
+    when: db_type == "redis"
+    notify: restart redis
+
+# File exclusions (databases don't typically have source code)
+file_exclusions:
+  - ".git"
+  - "deployment"
+  - "deployments"
+  - "*.log"
+  - ".env"
+
+# Default environment variables
+default_env:
+  DB_HOST: "0.0.0.0"
+  DB_NAME: "{{ db_name | default(service_name) }}"
+  DB_USER: "{{ db_user | default(service_name) }}"
+
+# Health check (database-specific)
+health_check_path: "/"  # Databases use port checks instead
+
+# Default systemd service configuration (uses existing system services)
+systemd_service:
+  Type: notify
+  ExecStart: "{{ '/usr/lib/postgresql/14/bin/postgres' if db_type == 'postgresql' else '/usr/bin/redis-server' }}"
+  Restart: always
+  RestartSec: 5

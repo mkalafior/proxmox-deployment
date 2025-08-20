@@ -1,0 +1,32 @@
+# Service configuration for postgres-db
+# Generated on Wed Aug 20 09:17:17 CEST 2025
+
+service_name: postgres-db
+vm_name: postgres-db
+vm_id: 211
+vm_cores: 2
+vm_memory: 2048
+vm_disk_size: 20
+vm_storage: local-lvm
+vm_network_bridge: vmbr0
+vm_swap: 512
+vm_unprivileged: true
+
+app_name: postgres-db
+app_user: appuser
+app_dir: /opt/postgres-db
+app_service_name: postgres-db
+app_port: 5432
+local_app_path: "../../services/postgres-db"
+
+service_hostname: postgres-db
+app_subdomain: postgres-db
+
+dns_server: 192.168.1.11
+dns_domain: proxmox.local
+
+# Custom environment variables (add as needed)
+custom_env_vars: {}
+
+# Additional ports to open in firewall (add as needed)
+additional_ports: []

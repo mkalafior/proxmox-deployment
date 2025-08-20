@@ -1,0 +1,48 @@
+# Template Version Tracking
+# This file tracks template versions to help with updates
+
+TEMPLATE_VERSION=1.0.6
+LAST_UPDATED=2024-08-20
+
+# Template Change Log:
+# v1.0.6 (2024-08-20)
+# - Added container status verification before IP discovery
+# - Added debug output for container status and interfaces API response
+# - Removed broken retry logic that was causing conditional evaluation errors
+# - Focus on diagnosing why interfaces API returns null
+
+# v1.0.5 (2024-08-20)
+# - Fixed retry logic issues that were causing deployment failures
+# - Simplified retry mechanism to avoid Ansible conditional evaluation errors
+# - Restored working IP discovery with better error handling
+# - Fixed 'null' is undefined error in until conditions
+
+# v1.0.4 (2024-08-20)
+# - Fixed IP discovery failure handling - deployment now fails properly when IP cannot be retrieved
+# - Added retry logic for Proxmox API calls (3 retries with 10s delay)
+# - Improved error messages with clear troubleshooting steps
+# - Prevents deployment from continuing with undefined container_ip
+
+# v1.0.3 (2024-08-20)
+# - Fixed cleanup script output formatting
+# - Suppressed raw JSON responses from curl commands
+# - Added proper status checking and user-friendly messages
+
+# v1.0.2 (2024-08-20)
+# - Fixed undefined variable 'internet_test' in second play
+# - Removed conditional from netcat installation
+# - Fixed systemd service template entry point
+
+# v1.0.1 (2024-08-20)
+# - Fixed malformed if-else in deploy.sh template
+# - Clean environment loading works correctly
+# - Regenerated service01 and service02 deployments
+
+# v1.0.0 (2024-08-20)
+# - Initial multi-language template system
+# - Clean environment loading
+# - Service type configurations
+# - Base Ansible templates
+
+# When you modify templates, increment the version and add changelog entry
+# Then run: ./update-deployments.sh to update all services

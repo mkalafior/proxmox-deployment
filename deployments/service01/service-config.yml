@@ -1,0 +1,32 @@
+# Service configuration for service01
+# Generated on Wed Aug 20 21:14:38 CEST 2025
+
+service_name: service01
+vm_name: service01
+vm_id: 201
+vm_cores: 2
+vm_memory: 2048
+vm_disk_size: 20
+vm_storage: local-lvm
+vm_network_bridge: vmbr0
+vm_swap: 512
+vm_unprivileged: true
+
+app_name: service01
+app_user: appuser
+app_dir: /opt/service01
+app_service_name: service01
+app_port: 3001
+local_app_path: "../../services/service01"
+
+service_hostname: service01
+app_subdomain: api
+
+dns_server: 192.168.1.11
+dns_domain: proxmox.local
+
+# Custom environment variables (add as needed)
+custom_env_vars: {}
+
+# Additional ports to open in firewall (add as needed)
+additional_ports: []
