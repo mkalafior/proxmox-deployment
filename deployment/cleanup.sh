@@ -70,6 +70,7 @@ echo ""
 echo "🗑️  This will remove the following resources:"
 echo "   • Proxmox Container: hello-world-bun-app (VM ID: ${VM_ID:-200})"
 echo "   • All application data and logs"
+echo "   • DNS records for service hostname"
 echo "   • Local deployment files (vm_ip.txt)"
 if [[ -n "${CLOUDFLARE_DOMAIN:-}" ]]; then
     echo "   • Cloudflare tunnel route: ${APP_SUBDOMAIN}.${CLOUDFLARE_DOMAIN}"
@@ -82,6 +83,10 @@ if [[ -f "vm_ip.txt" ]]; then
     VM_IP=$(cat vm_ip.txt)
     echo "   • Target VM IP: $VM_IP"
 fi
+
+# Show hostname that will be cleaned up
+SERVICE_HOSTNAME="${SERVICE_HOSTNAME:-hello-world-bun-app}"
+echo "   • DNS hostname: ${SERVICE_HOSTNAME}.proxmox.local"
 
 echo ""
 echo "⚠️  WARNING: This action cannot be undone!"
@@ -105,6 +110,14 @@ if [[ -n "$VM_IP" ]] && [[ -f "$HOME/.ssh/id_proxmox" ]]; then
         -m systemd -a "name=hello-world-bun-app state=stopped" \
         --ssh-extra-args="-o ConnectTimeout=10 -o StrictHostKeyChecking=no" \
         2>/dev/null || echo "   (Service stop failed or VM not accessible)"
+    
+    # Clean up DNS records
+    echo "   Cleaning up DNS records..."
+    SERVICE_HOSTNAME="${SERVICE_HOSTNAME:-hello-world-bun-app}"
+    ansible all -i "${VM_IP}," -u root --private-key="$HOME/.ssh/id_proxmox" \
+        -m shell -a "/opt/dns-register.sh cleanup" \
+        --ssh-extra-args="-o ConnectTimeout=10 -o StrictHostKeyChecking=no" \
+        2>/dev/null && echo "   ✅ DNS records cleaned up" || echo "   (DNS cleanup failed or not configured)"
 fi
 
 # Clean up Cloudflare tunnel routing (if configured)

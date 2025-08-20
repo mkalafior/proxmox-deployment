@@ -65,3 +65,8 @@ vm_features:
 # Backup configuration (optional)
 vm_backup: false
 vm_backup_schedule: ""  # Cron format: "0 2 * * *" for daily at 2 AM
+
+# DNS Configuration for service hostname resolution
+dns_server: "192.168.1.11"  # CT101 IP address
+dns_domain: "proxmox.local"
+service_hostname: "{{ lookup('env', 'SERVICE_HOSTNAME') | default(app_name) }}"

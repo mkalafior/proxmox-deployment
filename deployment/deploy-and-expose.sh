@@ -297,6 +297,16 @@ show_summary() {
     echo "📊 Your application is now running:"
     echo "   VM IP: ${VM_IP}"
     echo "   Local URL: http://${VM_IP}:${APP_PORT}"
+    
+    # Show hostname if SERVICE_HOSTNAME is set
+    if [[ -n "${SERVICE_HOSTNAME:-}" ]]; then
+        echo "   Hostname URL: http://${SERVICE_HOSTNAME}.proxmox.local:${APP_PORT}"
+        echo "   DNS Name: ${SERVICE_HOSTNAME}.proxmox.local"
+    else
+        echo "   Hostname URL: http://hello-world-bun-app.proxmox.local:${APP_PORT}"
+        echo "   DNS Name: hello-world-bun-app.proxmox.local"
+    fi
+    
     if [[ "$CLOUDFLARE_ENABLED" == "true" ]]; then
         echo "   Public URL: https://${APP_SUBDOMAIN}.${DOMAIN}"
     else
@@ -318,6 +328,14 @@ show_summary() {
         echo "💡 Your application is now publicly accessible!"
     else
         echo "💡 Your application is accessible within your internal network!"
+        echo ""
+        echo "🔗 Service-to-Service Communication:"
+        if [[ -n "${SERVICE_HOSTNAME:-}" ]]; then
+            echo "   curl http://${SERVICE_HOSTNAME}.proxmox.local:${APP_PORT}"
+        else
+            echo "   curl http://hello-world-bun-app.proxmox.local:${APP_PORT}"
+        fi
+        echo "   (Works from Home Assistant, other containers, and network devices)"
         echo ""
         echo "🌐 To enable public access later:"
         echo "   1. Set CLOUDFLARE_DOMAIN and APP_SUBDOMAIN in env.proxmox"

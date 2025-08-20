@@ -401,6 +401,75 @@
       pause:
         seconds: 5
 
+    - name: Copy DNS authentication key
+      template:
+        src: bind-key.conf.j2
+        dest: /etc/bind-key.conf
+        mode: '0600'
+        owner: root
+        group: root
+
+    - name: Install netcat for DNS connectivity testing
+      apt:
+        name: netcat-openbsd
+        state: present
+      when: not internet_test.failed
+
+    - name: Copy DNS registration script
+      template:
+        src: dns-register.sh.j2
+        dest: /opt/dns-register.sh
+        mode: '0755'
+        owner: root
+        group: root
+
+    - name: Test DNS registration script
+      command: /opt/dns-register.sh test
+      register: dns_test_result
+      ignore_errors: true
+
+    - name: Display DNS test result
+      debug:
+        msg: |
+          DNS Test Result:
+          {{ dns_test_result.stdout }}
+          {% if dns_test_result.stderr %}
+          Errors: {{ dns_test_result.stderr }}
+          {% endif %}
+
+    - name: Create DNS registration service
+      template:
+        src: dns-register.service.j2
+        dest: /etc/systemd/system/dns-register.service
+        mode: '0644'
+      notify: reload systemd
+
+    - name: Enable and start DNS registration service
+      systemd:
+        name: dns-register
+        enabled: yes
+        state: started
+        daemon_reload: yes
+
+    - name: Wait for DNS registration to complete
+      pause:
+        seconds: 3
+
+    - name: Test hostname resolution
+      shell: nslookup {{ service_hostname }}.{{ dns_domain }} {{ dns_server }}
+      register: dns_resolution_test
+      ignore_errors: true
+
+    - name: Display DNS resolution result
+      debug:
+        msg: |
+          DNS Resolution Test:
+          {% if dns_resolution_test.rc == 0 %}
+          ✅ SUCCESS: {{ service_hostname }}.{{ dns_domain }} is resolvable
+          {% else %}
+          ⚠️  WARNING: DNS resolution failed, service accessible by IP only
+          {% endif %}
+
     - name: Check service status
       systemd:
         name: "{{ app_service_name }}"
