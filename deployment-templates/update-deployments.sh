@@ -19,6 +19,17 @@ log_error() { echo -e "${RED}[ERROR]${NC} $1"; }
 log_step() { echo -e "${BLUE}[STEP]${NC} $1"; }
 log_service() { echo -e "${CYAN}[SERVICE]${NC} $1"; }
 
+# TEMPLATES and TARGET PROJECT roots
+# If used as a global tool, set PROJECT_ROOT_OVERRIDE to the target repo path
+# and TEMPLATES_ROOT to the absolute path of the templates repository root
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+DEFAULT_TEMPLATES_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+TEMPLATES_ROOT="${TEMPLATES_ROOT:-${DEFAULT_TEMPLATES_ROOT}}"
+TEMPLATES_BASE="${TEMPLATES_ROOT}/deployment-templates"
+
+TARGET_PROJECT_ROOT="${PROJECT_ROOT_OVERRIDE:-$(cd "${TEMPLATES_ROOT}/.." && pwd)}"
+DEPLOYMENTS_BASE="${TARGET_PROJECT_ROOT}/deployments"
+
 show_help() {
     echo "Template Update System"
     echo ""
@@ -52,13 +63,13 @@ show_help() {
 
 # Get list of all services
 get_all_services() {
-    find ../deployments -maxdepth 1 -type d -not -name "deployments" -exec basename {} \; | sort
+    find "${DEPLOYMENTS_BASE}" -maxdepth 1 -type d -not -name "deployments" -exec basename {} \; | sort
 }
 
 # Get service type from service config
 get_service_type() {
     local service="$1"
-    local config_file="../deployments/$service/service-config.yml"
+    local config_file="${DEPLOYMENTS_BASE}/$service/service-config.yml"
     
     if [[ -f "$config_file" ]]; then
         grep "^service_type:" "$config_file" | cut -d: -f2 | tr -d ' ' || echo "nodejs"
@@ -99,18 +110,24 @@ load_service_config() {
     fi
     
     # Parse YAML config into environment variables
-    while IFS=': ' read -r key value; do
+    while IFS= read -r line; do
         # Skip comments and empty lines
-        [[ "$key" =~ ^[[:space:]]*# ]] && continue
-        [[ -z "$key" ]] && continue
+        [[ "$line" =~ ^[[:space:]]*# ]] && continue
+        [[ -z "$line" ]] && continue
         
-        # Clean up key and value
-        key=$(echo "$key" | tr -d ' ')
-        value=$(echo "$value" | tr -d ' "')
-        
-        # Export as environment variable
-        if [[ -n "$key" && -n "$value" ]]; then
-            export "$key"="$value"
+        # Parse key: value pairs
+        if [[ "$line" =~ ^[[:space:]]*([^:]+):[[:space:]]*(.*)$ ]]; then
+            key="${BASH_REMATCH[1]}"
+            value="${BASH_REMATCH[2]}"
+            
+            # Clean up key and value
+            key=$(echo "$key" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+            value=$(echo "$value" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//;s/^"//;s/"$//')
+            
+            # Export as environment variable
+            if [[ -n "$key" && -n "$value" ]]; then
+                export "$key"="$value"
+            fi
         fi
     done < "$config_file"
 }
@@ -121,8 +138,13 @@ update_deploy_yml() {
     local service_type="$2"
     local dry_run="$3"
     
-    local template_file="base/deploy.yml.j2"
-    local deployment_file="../deployments/$service/deploy.yml"
+    # Prefer service-type specific template if available
+    local type_template_file="${TEMPLATES_BASE}/service-types/${service_type}/deploy.yml.j2"
+    local template_file="${TEMPLATES_BASE}/base/deploy.yml.j2"
+    if [[ -f "$type_template_file" ]]; then
+        template_file="$type_template_file"
+    fi
+    local deployment_file="${DEPLOYMENTS_BASE}/$service/deploy.yml"
     
     if ! check_template_modified "$template_file" "$deployment_file"; then
         return 0  # No update needed
@@ -160,11 +182,31 @@ update_group_vars() {
     local service_type="$2"
     local dry_run="$3"
     
-    local template_file="base/group_vars/all.yml.j2"
-    local deployment_file="../deployments/$service/group_vars/all.yml"
+    # Prefer service-type specific template if available
+    local type_template_file="${TEMPLATES_BASE}/service-types/${service_type}/group_vars/all.yml.j2"
+    local template_file="${TEMPLATES_BASE}/base/group_vars/all.yml.j2"
+    if [[ -f "$type_template_file" ]]; then
+        template_file="$type_template_file"
+    fi
+    local deployment_file="${DEPLOYMENTS_BASE}/$service/group_vars/all.yml"
     
-    if ! check_template_modified "$template_file" "$deployment_file"; then
-        return 0  # No update needed
+    # Check if template or service config has been modified
+    local service_config="${DEPLOYMENTS_BASE}/$service/service-config.yml"
+    local template_needs_update=false
+    local config_needs_update=false
+    
+    if check_template_modified "$template_file" "$deployment_file"; then
+        template_needs_update=true
+    fi
+    
+    if [[ -f "$service_config" ]] && [[ "$service_config" -nt "$deployment_file" ]]; then
+        config_needs_update=true
+    fi
+    
+    # Decide whether to copy template; always run post-processing
+    local skip_copy=false
+    if [[ "$template_needs_update" == "false" && "$config_needs_update" == "false" ]]; then
+        skip_copy=true
     fi
     
     log_service "Updating group_vars/all.yml for $service ($service_type)"
@@ -183,7 +225,9 @@ update_group_vars() {
     load_service_config "$service"
     
     # Generate updated group_vars using the same approach as the generator
-    cp "$template_file" "$deployment_file"
+    if [[ "$skip_copy" == "false" ]]; then
+        cp "$template_file" "$deployment_file"
+    fi
     
     # Apply service-specific replacements
     sed -i '' "s/{{ service_name }}/$service/g" "$deployment_file"
@@ -205,10 +249,82 @@ update_group_vars() {
     sed -i '' "s/{{ dns_server | default('192.168.1.11') }}/${dns_server:-192.168.1.11}/g" "$deployment_file"
     sed -i '' "s/{{ dns_domain | default('proxmox.local') }}/${dns_domain:-proxmox.local}/g" "$deployment_file"
     
-    # Remove template-specific syntax that doesn't apply
-    sed -i '' '/{% if custom_env_vars %}/,/{% endif %}/d' "$deployment_file"
-    sed -i '' '/{% if additional_ports %}/,/{% endif %}/d' "$deployment_file"
+    # Replace proxmox_node_override token if provided, but flatten the conditional safely using awk below
+    if [[ -n "${proxmox_node:-}" ]]; then
+        sed -i '' "s/{{ proxmox_node_override }}/${proxmox_node}/g" "$deployment_file"
+    fi
     
+    # Remove/flatten Jinja blocks safely without truncating the file
+    tmp_file="${deployment_file}.tmp"
+    awk -v has_override="${proxmox_node:-}" '
+      BEGIN { in_custom=0; in_additional=0; in_pnode=0; drop_pnode=0 }
+      /^\{\% if proxmox_node_override \%\}$/ {
+        if (has_override!="") { in_pnode=1 } else { drop_pnode=1 }
+        next
+      }
+      /^\{\% if custom_env_vars \%\}$/ { in_custom=1; print "# Custom env vars (none configured)"; next }
+      /^\{\% if additional_ports \%\}$/ { in_additional=1; next }
+      /^\{\% for key, value in custom_env_vars.items\(\) \%\}$/ { if (in_custom) next }
+      /^\{\% for port in additional_ports \%\}$/ { if (in_additional) next }
+      /^\{\% endfor \%\}$/ { if (in_custom || in_additional) next }
+      /^\{\% endif \%\}$/ {
+        if (in_pnode) { in_pnode=0; next }
+        if (drop_pnode) { drop_pnode=0; next }
+        if (in_custom) { in_custom=0; next }
+        if (in_additional) { in_additional=0; next }
+      }
+      {
+        if (drop_pnode) next;
+        # When in_pnode (override present), keep and print the line (token already replaced earlier)
+        if (in_pnode) { print; next }
+        if (!in_custom && !in_additional) print
+      }
+    ' "$deployment_file" > "$tmp_file" && mv "$tmp_file" "$deployment_file"
+
+    # Ensure service_type is a concrete value and remove any template placeholders
+    sed -i '' "/{{ service_type /d" "$deployment_file"
+    if grep -q "^service_type:" "$deployment_file"; then
+        sed -i '' "s/^service_type:.*/service_type: ${service_type}/" "$deployment_file"
+    else
+        printf "\n# Service type\nservice_type: %s\n" "${service_type}" >> "$deployment_file"
+    fi
+
+    # Database-specific injection (idempotent)
+    if [[ "$service_type" == "database" ]]; then
+        db_name_val="${db_name:-$service}"
+        db_user_val="${db_user:-$service}"
+        if [[ -z "${db_password:-}" ]]; then
+            if command -v openssl >/dev/null 2>&1; then
+                db_password_val="$(openssl rand -base64 18 | tr -d '\n' | sed 's/[\"\'"'"'`$]//g')"
+            else
+                db_password_val="$(LC_ALL=C tr -dc 'A-Za-z0-9' </dev/urandom | head -c 20)"
+            fi
+        else
+            db_password_val="${db_password}"
+        fi
+        ensure_kv() {
+            local key="$1"; shift
+            local value="$1"; shift
+            if grep -q "^${key}:" "$deployment_file"; then
+                sed -i '' "s|^${key}:.*|${key}: ${value}|" "$deployment_file"
+            else
+                printf "${key}: %s\n" "${value}" >> "$deployment_file"
+            fi
+        }
+        ensure_kv "db_name" "${db_name_val}"
+        ensure_kv "db_user" "${db_user_val}"
+        if grep -q "^db_password:" "$deployment_file"; then
+            sed -i '' "s|^db_password:.*|db_password: \"${db_password_val}\"|" "$deployment_file"
+        else
+            printf "db_password: \"%s\"\n" "${db_password_val}" >> "$deployment_file"
+        fi
+        if [[ -n "${runtime_variant:-}" ]]; then
+            ensure_kv "runtime_variant" "${runtime_variant}"
+        else
+            ensure_kv "runtime_variant" "postgresql"
+        fi
+    fi
+
     log_info "✅ Updated group_vars/all.yml for $service"
 }
 
@@ -218,8 +334,8 @@ update_service_templates() {
     local service_type="$2"
     local dry_run="$3"
     
-    local template_dir="base/templates"
-    local deployment_dir="../deployments/$service/templates"
+    local template_dir="${TEMPLATES_BASE}/base/templates"
+    local deployment_dir="${DEPLOYMENTS_BASE}/$service/templates"
     
     if [[ ! -d "$template_dir" ]]; then
         return 0
@@ -267,7 +383,7 @@ update_service() {
     local service="$1"
     local dry_run="$2"
     
-    if [[ ! -d "../deployments/$service" ]]; then
+    if [[ ! -d "${DEPLOYMENTS_BASE}/$service" ]]; then
         log_error "Service not found: $service"
         return 1
     fi
@@ -412,8 +528,8 @@ main() {
     fi
 }
 
-# Change to script directory
-cd "$(dirname "${BASH_SOURCE[0]}")"
+# Change to template script directory for relative ops (templates are read via TEMPLATES_BASE)
+cd "${SCRIPT_DIR}"
 
 # Run main function
 main "$@"

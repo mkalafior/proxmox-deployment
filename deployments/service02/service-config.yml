@@ -1,5 +1,5 @@
 # Service configuration for service02
-# Generated on Wed Aug 20 20:48:59 CEST 2025
+# Generated on Thu Aug 21 08:19:49 CEST 2025
 
 service_name: service02
 vm_name: service02
@@ -20,13 +20,17 @@ app_port: 3002
 local_app_path: "../../services/service02"
 
 service_hostname: service02
-app_subdomain: worker
+app_subdomain: service02
 
 dns_server: 192.168.1.11
 dns_domain: proxmox.local
+
+# Proxmox node override (leave empty to use global default)
+# proxmox_node: pve2
 
 # Custom environment variables (add as needed)
 custom_env_vars: {}
 
 # Additional ports to open in firewall (add as needed)
 additional_ports: []
+proxmox_node: proxmox

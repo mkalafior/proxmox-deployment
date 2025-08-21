@@ -25,6 +25,8 @@ if ! load_clean_env "python-api" "$(pwd)"; then
     log_warn "Could not load environment, using defaults"
 fi
 if [[ -f "../../global-config/env.proxmox.global" ]]; then
+    source ../../global-config/env.proxmox.global
+fi
 
 if [[ -f "env.service" ]]; then
     source env.service

@@ -1,6 +1,6 @@
 ---
-# Deployment playbook for postgres-db database service
-- name: Deploy postgres-db to Proxmox VE
+# Deployment playbook for {{ service_name }} database service
+- name: Deploy {{ service_name }} to Proxmox VE
   hosts: localhost
   connection: local
   gather_facts: true
@@ -128,7 +128,7 @@
       systemd:
         daemon_reload: yes
 
-- name: Configure container and deploy postgres-db database
+- name: Configure container and deploy {{ service_name }} database
   hosts: proxmox_containers
   become: true
   vars_files:

@@ -30,12 +30,10 @@ fi
 
 # Load clean environment (prevents variable pollution)
 source ../../global-config/load-env.sh
-if ! load_clean_env "postgres-db" "$(pwd)"; then
+if ! load_clean_env "$SERVICE_NAME" "$(pwd)"; then
     log_error "Failed to load clean environment"
     exit 1
 fi
-if [[ -f "../../global-config/env.proxmox.global" ]]; then
-else
 
 
 # Check required environment variables

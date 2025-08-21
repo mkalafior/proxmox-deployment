@@ -248,19 +248,22 @@ case "$SERVICE_TYPE" in
         ;;
 esac
 
-# Check if we're in the right directory
+# Roots: support global templates and external target projects
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+DEFAULT_TEMPLATES_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+TEMPLATES_ROOT="${TEMPLATES_ROOT:-${DEFAULT_TEMPLATES_ROOT}}"
+TEMPLATES_BASE="${TEMPLATES_ROOT}/deployment-templates"
 
-if [[ ! -d "$PROJECT_ROOT/deployment-templates/service-types" ]]; then
-    log_error "Cannot find service type templates. Please run from project root."
+TARGET_PROJECT_ROOT="${PROJECT_ROOT_OVERRIDE:-${TEMPLATES_ROOT%/deployment-templates}}"
+if [[ ! -d "$TEMPLATES_BASE/service-types" ]]; then
+    log_error "Cannot find service type templates at $TEMPLATES_BASE/service-types"
     exit 1
 fi
 
 # Set up paths
-DEPLOYMENT_DIR="$PROJECT_ROOT/deployments/$SERVICE_NAME"
-SERVICE_DIR="$PROJECT_ROOT/services/$SERVICE_NAME"
-SERVICE_TYPE_DIR="$PROJECT_ROOT/deployment-templates/service-types/$SERVICE_TYPE"
+DEPLOYMENT_DIR="$TARGET_PROJECT_ROOT/deployments/$SERVICE_NAME"
+SERVICE_DIR="$TARGET_PROJECT_ROOT/services/$SERVICE_NAME"
+SERVICE_TYPE_DIR="$TEMPLATES_BASE/service-types/$SERVICE_TYPE"
 
 if [[ ! -d "$SERVICE_TYPE_DIR" ]]; then
     log_error "Service type '$SERVICE_TYPE' not found in templates"
@@ -575,6 +578,9 @@ app_subdomain: $APP_SUBDOMAIN
 dns_server: 192.168.1.11
 dns_domain: proxmox.local
 
+# Proxmox node override (leave empty to use global default)
+# proxmox_node: pve2
+
 # Service type specific configuration
 EOF
 
@@ -611,7 +617,7 @@ generate_deployment
 
 # Use the original generator for now (we'll enhance it later)
 log_step "Generating Ansible deployment files..."
-"$PROJECT_ROOT/deployment-templates/generators/generate-service-deployment.sh" \
+"$TEMPLATES_BASE/generators/generate-service-deployment.sh" \
     "$SERVICE_NAME" \
     --vm-id "$VM_ID" \
     --port "$APP_PORT" \

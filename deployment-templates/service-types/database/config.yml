@@ -79,9 +79,54 @@ default_env:
 # Health check (database-specific)
 health_check_path: "/"  # Databases use port checks instead
 
-# Default systemd service configuration (uses existing system services)
-systemd_service:
-  Type: notify
-  ExecStart: "{{ '/usr/lib/postgresql/14/bin/postgres' if db_type == 'postgresql' else '/usr/bin/redis-server' }}"
-  Restart: always
-  RestartSec: 5
+# Provide a full Ansible deploy template for database services
+deploy_template: |
+  ---
+  # Deployment playbook for {{ service_name }} database service
+  - name: Deploy {{ service_name }} to Proxmox VE
+    hosts: localhost
+    connection: local
+    gather_facts: true
+    vars_files:
+      - group_vars/all.yml
+    tasks:
+      - debug: msg="Bootstrap VM done"
+
+  - name: Configure container and deploy {{ service_name }} database
+    hosts: proxmox_containers
+    become: true
+    vars_files:
+      - group_vars/all.yml
+    tasks:
+      - name: Update apt cache
+        apt:
+          update_cache: yes
+          cache_valid_time: 3600
+      - name: Install PostgreSQL
+        apt:
+          name:
+            - postgresql
+            - postgresql-contrib
+            - python3-psycopg2
+          state: present
+        when: db_type == 'postgresql'
+      - name: Ensure PostgreSQL is running
+        systemd:
+          name: postgresql
+          state: started
+          enabled: yes
+        when: db_type == 'postgresql'
+      - name: Initialize database
+        postgresql_db:
+          name: "{{ db_name }}"
+          state: present
+        become_user: postgres
+        when: db_type == 'postgresql'
+      - name: Create database user
+        postgresql_user:
+          name: "{{ db_user }}"
+          password: "{{ db_password }}"
+          db: "{{ db_name }}"
+          priv: ALL
+        become_user: postgres
+        when: db_type == 'postgresql'

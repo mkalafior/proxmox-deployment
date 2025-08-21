@@ -170,19 +170,23 @@ if [[ ! "$SERVICE_NAME" =~ ^[a-z0-9][a-z0-9-]*[a-z0-9]$|^[a-z0-9]$ ]]; then
     exit 1
 fi
 
-# Check if we're in the right directory
+# Roots: support global templates and external target projects
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+DEFAULT_TEMPLATES_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+TEMPLATES_ROOT="${TEMPLATES_ROOT:-${DEFAULT_TEMPLATES_ROOT}}"
+TEMPLATES_BASE="${TEMPLATES_ROOT}/deployment-templates"
 
-if [[ ! -f "$PROJECT_ROOT/deployment-templates/base/deploy.yml.j2" ]]; then
-    log_error "Cannot find deployment templates. Please run from project root."
+TARGET_PROJECT_ROOT="${PROJECT_ROOT_OVERRIDE:-${TEMPLATES_ROOT%/deployment-templates}}"
+
+if [[ ! -f "$TEMPLATES_BASE/base/deploy.yml.j2" ]]; then
+    log_error "Cannot find deployment templates at $TEMPLATES_BASE/base/deploy.yml.j2"
     exit 1
 fi
 
 # Set up paths
-DEPLOYMENT_DIR="$PROJECT_ROOT/deployments/$SERVICE_NAME"
-SERVICE_DIR="$PROJECT_ROOT/services/$SERVICE_NAME"
-TEMPLATE_DIR="$PROJECT_ROOT/deployment-templates/base"
+DEPLOYMENT_DIR="$TARGET_PROJECT_ROOT/deployments/$SERVICE_NAME"
+SERVICE_DIR="$TARGET_PROJECT_ROOT/services/$SERVICE_NAME"
+TEMPLATE_DIR="$TEMPLATES_BASE/base"
 
 echo "🚀 Service Deployment Generator"
 echo "==============================="
@@ -312,6 +316,9 @@ app_subdomain: $APP_SUBDOMAIN
 dns_server: $DEFAULT_DNS_SERVER
 dns_domain: $DEFAULT_DNS_DOMAIN
 
+# Proxmox node override (leave empty to use global default)
+# proxmox_node: pve2
+
 # Custom environment variables (add as needed)
 custom_env_vars: {}
 
@@ -346,6 +353,9 @@ sed -i '' "s|{{ local_app_path }}|$LOCAL_APP_PATH|g" "$DEPLOYMENT_DIR/group_vars
 sed -i '' "s/{{ service_hostname }}/$SERVICE_HOSTNAME/g" "$DEPLOYMENT_DIR/group_vars/all.yml"
 sed -i '' "s/{{ dns_server | default('192.168.1.11') }}/$DEFAULT_DNS_SERVER/g" "$DEPLOYMENT_DIR/group_vars/all.yml"
 sed -i '' "s/{{ dns_domain | default('proxmox.local') }}/$DEFAULT_DNS_DOMAIN/g" "$DEPLOYMENT_DIR/group_vars/all.yml"
+
+# Remove the proxmox_node_override conditional block since it's commented out by default
+sed -i '' '/{% if proxmox_node_override %}/,/{% endif %}/d' "$DEPLOYMENT_DIR/group_vars/all.yml"
 
 # Remove template-specific syntax that doesn't apply
 sed -i '' '/{% if custom_env_vars %}/,/{% endif %}/d' "$DEPLOYMENT_DIR/group_vars/all.yml"
@@ -797,7 +807,7 @@ echo ""
 echo "🎉 Service deployment generated successfully!"
 echo "============================================="
 echo ""
-echo "📁 Generated files in deployments/$SERVICE_NAME/:"
+echo "📁 Generated files in $DEPLOYMENT_DIR/:"
 echo "   • deploy.yml          - Ansible deployment playbook"
 echo "   • group_vars/all.yml  - Service configuration"
 echo "   • env.service         - Service environment variables"

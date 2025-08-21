@@ -34,8 +34,7 @@ if ! load_clean_env "python-api" "$(pwd)"; then
     log_error "Failed to load clean environment"
     exit 1
 fi
-if [[ -f "../../global-config/env.proxmox.global" ]]; then
-else
+# Environment loaded successfully by load_clean_env function above
 
 
 # Check required environment variables

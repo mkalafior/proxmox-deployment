@@ -7,7 +7,7 @@
 proxmox_host: "{{ lookup('env', 'PROXMOX_HOST') | default('192.168.1.100') }}"
 proxmox_user: "{{ lookup('env', 'PROXMOX_USER') | default('root@pam') }}"
 proxmox_password: "{{ lookup('env', 'PROXMOX_PASSWORD') }}"
-proxmox_node: "{{ lookup('env', 'PROXMOX_NODE') | default('proxmox') }}"
+proxmox_node: "{{ proxmox_node_override | default(lookup('env', 'PROXMOX_NODE')) | default('proxmox') }}"
 proxmox_api_validate_certs: false
 
 # Proxmox API Token Authentication (preferred for automation)
@@ -36,32 +36,25 @@ app_dir: {{ app_dir }}
 app_service_name: {{ app_service_name }}
 app_port: {{ app_port }}
 
+# Service type
+service_type: {{ service_type | default('nodejs') }}
+
 # Local source code path
 local_app_path: "{{ local_app_path }}"
 
-# Production Environment Variables
+# Production Environment Variables (apps can ignore if not needed)
 production_env:
   NODE_ENV: production
   PORT: "{{ app_port }}"
   HOST: "0.0.0.0"
-{% if custom_env_vars %}
-{% for key, value in custom_env_vars.items() %}
-  {{ key }}: "{{ value }}"
-{% endfor %}
-{% endif %}
 
 # Security Configuration
 ssh_public_key_path: "{{ ansible_env.HOME }}/.ssh/id_proxmox.pub"
 allowed_ports:
   - "22"    # SSH
-  - "{{ app_port }}"  # Application port
+  - "{{ app_port }}"  # Application/db port
   - "80"    # HTTP (for future use)
   - "443"   # HTTPS (for future use)
-{% if additional_ports %}
-{% for port in additional_ports %}
-  - "{{ port }}"
-{% endfor %}
-{% endif %}
 
 # DNS Configuration for service hostname resolution
 dns_server: "{{ dns_server | default('192.168.1.11') }}"  # CT101 IP address

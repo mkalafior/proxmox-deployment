@@ -43,6 +43,47 @@ proxmox-deploy-playground/
 - **MongoDB** - Document database
 - **Static Sites** - Nginx-served websites
 
+## 🔧 Installation (Linux/macOS)
+
+Install the global templates and CLI once, then use them from any project without copying files.
+
+### Prerequisites
+- git, bash
+
+### Linux
+```bash
+git clone https://github.com/your-org/proxmox-deploy-playground
+cd proxmox-deploy-playground
+bash tools/install-global-templates.sh
+
+# Ensure CLI is on your PATH (add once)
+echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc
+source ~/.bashrc
+
+# Verify
+proxmox-deploy help
+```
+
+### macOS (zsh)
+```bash
+git clone https://github.com/your-org/proxmox-deploy-playground
+cd proxmox-deploy-playground
+bash tools/install-global-templates.sh
+
+# Ensure CLI is on your PATH (add once)
+echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc
+source ~/.zshrc
+
+# Verify
+proxmox-deploy help
+```
+
+Notes
+- The installer places templates in `~/.proxmox-deploy/templates` and symlinks the CLI to `~/.local/bin/proxmox-deploy`.
+- The CLI auto-updates templates (`git pull`) on use.
+- To target a different project directory: run commands from that project root. Advanced: set `PROJECT_ROOT_OVERRIDE=/abs/path`.
+- Advanced: point to a custom templates checkout by exporting `TEMPLATES_ROOT=/abs/path/to/templates-root`.
+
 ## 🎯 Quick Start
 
 ### 1. Generate a New Service
@@ -125,6 +166,36 @@ export VM_ID="202"
 export APP_PORT="8000"
 export APP_SUBDOMAIN="api"
 export SERVICE_HOSTNAME="python-api"
+```
+
+### Per-Service Proxmox Node Override
+Deploy different services to different Proxmox nodes by configuring `deployments/<service>/service-config.yml`:
+
+```yaml
+# Proxmox node override (leave empty to use global default)
+proxmox_node: pve-node-2  # Deploy this service to specific node
+```
+
+**Workflow:**
+1. **Generate service**: `./deployment-templates/generators/generate-service-deployment.sh --service-name myservice --vm-id 203`
+2. **Set target node**: Edit `deployments/myservice/service-config.yml` and set `proxmox_node: your-node`
+3. **Update config**: `./deployment-templates/update-deployments.sh myservice`
+4. **Deploy**: `cd deployments/myservice && ./deploy.sh`
+
+**Example - Multi-node deployment:**
+```bash
+# Deploy API to node pve1
+echo "proxmox_node: pve1" >> deployments/api-service/service-config.yml
+
+# Deploy database to node pve2  
+echo "proxmox_node: pve2" >> deployments/postgres-db/service-config.yml
+
+# Deploy cache to node pve3
+echo "proxmox_node: pve3" >> deployments/redis-cache/service-config.yml
+
+# Update and deploy all
+./deployment-templates/update-deployments.sh
+./manage-services.sh deploy
 ```
 
 ## 🌐 Service Communication

@@ -7,7 +7,7 @@
 proxmox_host: "{{ lookup('env', 'PROXMOX_HOST') | default('192.168.1.100') }}"
 proxmox_user: "{{ lookup('env', 'PROXMOX_USER') | default('root@pam') }}"
 proxmox_password: "{{ lookup('env', 'PROXMOX_PASSWORD') }}"
-proxmox_node: "{{ lookup('env', 'PROXMOX_NODE') | default('proxmox') }}"
+proxmox_node: "{{ proxmox_node_override | default(lookup('env', 'PROXMOX_NODE')) | default('proxmox') }}"
 proxmox_api_validate_certs: false
 
 # Proxmox API Token Authentication (preferred for automation)

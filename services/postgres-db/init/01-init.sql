@@ -1,7 +1,7 @@
 -- database service: postgres-db
--- Database: myapp
+-- Database: postgres-db
 
-CREATE DATABASE IF NOT EXISTS myapp;
-CREATE USER IF NOT EXISTS 'appuser'@'%' IDENTIFIED BY 'secret123';
-GRANT ALL PRIVILEGES ON myapp.* TO 'appuser'@'%';
+CREATE DATABASE IF NOT EXISTS postgres-db;
+CREATE USER IF NOT EXISTS 'postgres-db'@'%' IDENTIFIED BY 'secure_postgres_password_123';
+GRANT ALL PRIVILEGES ON postgres-db.* TO 'postgres-db'@'%';
 FLUSH PRIVILEGES;

@@ -19,12 +19,10 @@ log_error() { echo -e "${RED}[ERROR]${NC} $1"; }
 echo "🧹 Cleanup $SERVICE_NAME Deployment"
 echo "===================================="
 
-# Load clean environment
-source ../../global-config/load-env.sh
-if ! load_clean_env "postgres-db" "$(pwd)"; then
-    log_warn "Could not load environment, using defaults"
-fi
+# Load configurations
 if [[ -f "../../global-config/env.proxmox.global" ]]; then
+    source ../../global-config/env.proxmox.global
+fi
 
 if [[ -f "env.service" ]]; then
     source env.service
@@ -49,18 +47,33 @@ if [[ "$REPLY" != "yes" ]]; then
     exit 0
 fi
 
-log_info "Stopping and removing container..."
+log_info "Stopping container..."
 
-# Stop and remove container
-curl -k -X POST \
+# Stop container
+STOP_RESPONSE=$(curl -k -s -X POST \
   -H "Authorization: PVEAPIToken=${TOKEN_ID}=${TOKEN_SECRET}" \
-  "https://${PROXMOX_HOST}:8006/api2/json/nodes/${PROXMOX_NODE}/lxc/${VM_ID}/status/stop" || true
+  "https://${PROXMOX_HOST}:8006/api2/json/nodes/${PROXMOX_NODE}/lxc/${VM_ID}/status/stop" 2>/dev/null || echo '{"errors":["Failed to stop"]}')
+
+if echo "$STOP_RESPONSE" | grep -q '"data"'; then
+    log_info "Container stopped successfully"
+else
+    log_warn "Container may already be stopped"
+fi
 
 sleep 5
 
-curl -k -X DELETE \
+log_info "Removing container..."
+
+# Remove container
+DELETE_RESPONSE=$(curl -k -s -X DELETE \
   -H "Authorization: PVEAPIToken=${TOKEN_ID}=${TOKEN_SECRET}" \
-  "https://${PROXMOX_HOST}:8006/api2/json/nodes/${PROXMOX_NODE}/lxc/${VM_ID}" || true
+  "https://${PROXMOX_HOST}:8006/api2/json/nodes/${PROXMOX_NODE}/lxc/${VM_ID}" 2>/dev/null || echo '{"errors":["Failed to delete"]}')
+
+if echo "$DELETE_RESPONSE" | grep -q '"data"'; then
+    log_info "Container removed successfully"
+else
+    log_error "Failed to remove container - it may not exist"
+fi
 
 # Clean up local files
 rm -f vm_ip.txt

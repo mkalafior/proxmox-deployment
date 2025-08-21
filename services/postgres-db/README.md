@@ -2,15 +2,15 @@
 
 ## Configuration
 - Database Type: postgresql
-- Database Name: myapp
-- Database User: appuser
+- Database Name: postgres-db
+- Database User: postgres-db
 - Port: 5432
 
 ## Connection String
 ```
-postgresql://appuser:secret123@postgres-db.proxmox.local:5432/myapp
+postgresql://postgres-db:secure_postgres_password_123@postgres-db.proxmox.local:5432/postgres-db
 ```
 
 ## Management
-- Connect: `psql -h postgres-db.proxmox.local -p 5432 -U appuser -d myapp`
-- Backup: `pg_dump -h postgres-db.proxmox.local -p 5432 -U appuser myapp > backup.sql`
+- Connect: `psql -h postgres-db.proxmox.local -p 5432 -U postgres-db -d postgres-db`
+- Backup: `pg_dump -h postgres-db.proxmox.local -p 5432 -U postgres-db postgres-db > backup.sql`

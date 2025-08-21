@@ -1,0 +1,83 @@
+[0;36m[SERVICE][0m Deploying service01
+🚀 Deploying service01
+==========================
+[0;32m[ENV][0m Loading global configuration from /Users/sebastian/Web/proxmox-deploy-playground/deployments/service01/../../global-config/env.proxmox.global
+[0;32m[ENV][0m Loading service configuration from /Users/sebastian/Web/proxmox-deploy-playground/deployments/service01/env.service
+[0;32m[ENV][0m Environment validation passed
+[0;34m[STEP][0m Installing Ansible requirements...
+[0;34m[STEP][0m Validating deployment configuration...
+
+🎯 Deployment Plan for service01:
+   Proxmox Host: 192.168.1.99
+   VM ID: 201
+   Application Port: 3001
+   Service Hostname: service01
+   Public URL: https://api.ropczycka411.org
+
+[0;32m[ENV][0m Starting deployment of service01...
+Using /Users/sebastian/Web/proxmox-deploy-playground/deployments/service01/ansible.cfg as config file
+
+PLAY [Deploy service01 to Proxmox VE] ******************************************
+
+TASK [Gathering Facts] *********************************************************
+ok: [localhost]
+
+TASK [Validate environment variables] ******************************************
+ok: [localhost] => {
+    "changed": false,
+    "msg": "All assertions passed"
+}
+
+TASK [Debug environment variables] *********************************************
+ok: [localhost] => {
+    "msg": "Environment Debug for service01:\n- PROXMOX_HOST: 192.168.1.99\n- PROXMOX_USER: root@pam\n- PROXMOX_PASSWORD: SET\n- TOKEN_ID: root@pam!deploy-root\n- TOKEN_SECRET: SET\n\nService Configuration:\n- Service Name: service01\n- VM ID: 201\n- VM Name: service01\n- App Port: 3001\n"
+}
+
+TASK [Display authentication method] *******************************************
+ok: [localhost] => {
+    "msg": "Using API Token authentication\nToken ID: root@pam!deploy-root\nUser: root@pam\n"
+}
+
+TASK [Check for SSH public key] ************************************************
+ok: [localhost] => {"changed": false, "stat": {"atime": 1755425293.2322154, "attr_flags": "", "attributes": [], "birthtime": 1755425273.9009035, "block_size": 4096, "blocks": 8, "charset": "us-ascii", "checksum": "7806a760e6886d21103de794b25ec6b41abe5905", "ctime": 1755425273.9009461, "dev": 16777232, "device_type": 0, "executable": false, "exists": true, "flags": 0, "generation": 0, "gid": 20, "gr_name": "staff", "inode": 45309259, "isblk": false, "ischr": false, "isdir": false, "isfifo": false, "isgid": false, "islnk": false, "isreg": true, "issock": false, "isuid": false, "mimetype": "text/plain", "mode": "0644", "mtime": 1755425273.9009461, "nlink": 1, "path": "/Users/sebastian/.ssh/id_proxmox.pub", "pw_name": "sebastian", "readable": true, "rgrp": true, "roth": true, "rusr": true, "size": 110, "uid": 501, "version": null, "wgrp": false, "woth": false, "writeable": true, "wusr": true, "xgrp": false, "xoth": false, "xusr": false}}
+
+TASK [Generate dedicated Proxmox SSH key if it doesn't exist] ******************
+skipping: [localhost] => {"changed": false, "false_condition": "not ssh_key_stat.stat.exists", "skip_reason": "Conditional result was False"}
+
+TASK [Read SSH public key] *****************************************************
+ok: [localhost] => {"changed": false, "content": "c3NoLWVkMjU1MTkgQUFBQUMzTnphQzFsWkRJMU5URTVBQUFBSUJKdy9QZkM3bzQ4SHA0anBHMTJsMGVNU3NBK0NrbzRncFJlNkhyNXdiZTIgcHJveG1veC1oZWxsby13b3JsZC0yMDI1MDgxNwo=", "encoding": "base64", "source": "/Users/sebastian/.ssh/id_proxmox.pub"}
+
+TASK [Create Proxmox container via curl command] *******************************
+changed: [localhost] => {"attempts": 1, "changed": true, "cmd": "curl -k -X POST  -H \"Authorization: PVEAPIToken=root@pam!deploy-root=04fdca05-e428-4474-99a4-f1d9bada3c0e\"  -H \"Content-Type: application/x-www-form-urlencoded\"  -d \"vmid=201&unprivileged=1&features=nesting%3D1&password=TUEK3TIAGK2bqFvp&ssh-public-keys=ssh-ed25519%20AAAAC3NzaC1lZDI1NTE5AAAAIBJw/PfC7o48Hp4jpG12l0eMSsA%2BCko4gpRe6Hr5wbe2%20proxmox-hello-world-20250817&ostemplate=local%3Avztmpl/ubuntu-24.04-standard_24.04-2_amd64.tar.zst&rootfs=local-lvm%3A20&cores=2&memory=2048&swap=512&net0=name%3Deth0%2Cbridge%3Dvmbr0%2Cfirewall%3D1%2Cip6%3Ddhcp%2Cip%3Ddhcp\"  \"https://192.168.1.99:8006/api2/json/nodes/pve/lxc\"\n", "delta": "0:00:00.220349", "end": "2025-08-20 21:16:54.989481", "msg": "", "rc": 0, "start": "2025-08-20 21:16:54.769132", "stderr": "  % Total    % Received % Xferd  Average Speed   Time    Time     Time  Current\n                                 Dload  Upload   Total   Spent    Left  Speed\n\r  0     0    0     0    0     0      0      0 --:--:-- --:--:-- --:--:--     0\r100   478  100    81  100   397    383   1881 --:--:-- --:--:-- --:--:--  2276", "stderr_lines": ["  % Total    % Received % Xferd  Average Speed   Time    Time     Time  Current", "                                 Dload  Upload   Total   Spent    Left  Speed", "", "  0     0    0     0    0     0      0      0 --:--:-- --:--:-- --:--:--     0", "100   478  100    81  100   397    383   1881 --:--:-- --:--:-- --:--:--  2276"], "stdout": "{\"data\":\"UPID:pve:00174BAC:034A884C:68A61F27:vzcreate:201:root@pam!deploy-root:\"}", "stdout_lines": ["{\"data\":\"UPID:pve:00174BAC:034A884C:68A61F27:vzcreate:201:root@pam!deploy-root:\"}"]}
+
+TASK [Debug Proxmox creation failure] ******************************************
+skipping: [localhost] => {"false_condition": "proxmox_vm.failed is defined and proxmox_vm.failed"}
+
+TASK [Start the container via direct API call] *********************************
+ok: [localhost] => {"cache_control": "max-age=0", "changed": false, "connection": "close", "content_length": "80", "content_type": "application/json;charset=UTF-8", "cookies": {}, "cookies_string": "", "date": "Wed, 20 Aug 2025 19:16:55 GMT", "elapsed": 0, "expires": "Wed, 20 Aug 2025 19:16:55 GMT", "json": {"data": "UPID:pve:00174BB2:034A886C:68A61F27:vzstart:201:root@pam!deploy-root:"}, "msg": "OK (80 bytes)", "pragma": "no-cache", "redirected": false, "server": "pve-api-daemon/3.0", "status": 200, "url": "https://192.168.1.99:8006/api2/json/nodes/pve/lxc/201/status/start"}
+
+TASK [Wait for container to be fully started] **********************************
+Pausing for 5 seconds
+(ctrl+C then 'C' = continue early, ctrl+C then 'A' = abort)
+ok: [localhost] => {"changed": false, "delta": 5, "echo": true, "rc": 0, "start": "2025-08-20 21:16:55.345538", "stderr": "", "stdout": "Paused for 5.03 seconds", "stop": "2025-08-20 21:17:00.373288", "user_input": ""}
+
+TASK [Wait for container to get IP address] ************************************
+Pausing for 10 seconds
+(ctrl+C then 'C' = continue early, ctrl+C then 'A' = abort)
+ok: [localhost] => {"changed": false, "delta": 10, "echo": true, "rc": 0, "start": "2025-08-20 21:17:00.428662", "stderr": "", "stdout": "Paused for 10.0 seconds", "stop": "2025-08-20 21:17:10.431134", "user_input": ""}
+
+TASK [Wait for container to get DHCP IP assignment] ****************************
+Pausing for 15 seconds
+(ctrl+C then 'C' = continue early, ctrl+C then 'A' = abort)
+ok: [localhost] => {"changed": false, "delta": 15, "echo": true, "rc": 0, "start": "2025-08-20 21:17:10.445027", "stderr": "", "stdout": "Paused for 15.0 seconds", "stop": "2025-08-20 21:17:25.447769", "user_input": ""}
+
+TASK [Get container network interfaces via Proxmox API (attempt 1)] ************
+ok: [localhost] => {"cache_control": "max-age=0", "changed": false, "connection": "close", "content": "{\"data\":null}", "content_length": "13", "content_type": "application/json;charset=UTF-8", "cookies": {}, "cookies_string": "", "date": "Wed, 20 Aug 2025 19:17:25 GMT", "elapsed": 0, "expires": "Wed, 20 Aug 2025 19:17:25 GMT", "json": {"data": null}, "msg": "OK (13 bytes)", "pragma": "no-cache", "redirected": false, "server": "pve-api-daemon/3.0", "status": 200, "url": "https://192.168.1.99:8006/api2/json/nodes/pve/lxc/201/interfaces"}
+
+TASK [Wait and retry if first attempt failed] **********************************
+fatal: [localhost]: FAILED! => {"msg": "The conditional check 'container_interfaces_result is defined and (container_interfaces_result.status != 200 or \n container_interfaces_result.json.data is not defined or\n container_interfaces_result.json.data == null)\n' failed. The error was: error while evaluating conditional (container_interfaces_result is defined and (container_interfaces_result.status != 200 or \n container_interfaces_result.json.data is not defined or\n container_interfaces_result.json.data == null)\n): 'null' is undefined\n\nThe error appears to be in '/Users/sebastian/Web/proxmox-deploy-playground/deployments/service01/deploy.yml': line 117, column 7, but may\nbe elsewhere in the file depending on the exact syntax problem.\n\nThe offending line appears to be:\n\n\n    - name: Wait and retry if first attempt failed\n      ^ here\n"}
+
+PLAY RECAP *********************************************************************
+localhost                  : ok=12   changed=1    unreachable=0    failed=1    skipped=2    rescued=0    ignored=0   
+
+[0;31m[ENV][0m service01 deployment failed

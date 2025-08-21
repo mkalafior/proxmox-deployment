@@ -1,0 +1,51 @@
+#!/bin/bash
+
+set -euo pipefail
+
+CMD="${1:-help}"
+shift || true
+
+TEMPLATES_ROOT_DEFAULT="$HOME/.proxmox-deploy/templates"
+TEMPLATES_ROOT="${TEMPLATES_ROOT:-$TEMPLATES_ROOT_DEFAULT}"
+PROJECT_ROOT_OVERRIDE="${PROJECT_ROOT_OVERRIDE:-$(pwd)}"
+
+ensure_templates() {
+  if [[ ! -d "$TEMPLATES_ROOT/.git" ]]; then
+    mkdir -p "$(dirname "$TEMPLATES_ROOT")"
+    git clone --depth 1 https://github.com/your-org/proxmox-deploy-playground "$TEMPLATES_ROOT"
+  else
+    git -C "$TEMPLATES_ROOT" pull --ff-only || true
+  fi
+}
+
+usage() {
+  echo "proxmox-deploy <command> [args]"
+  echo "Commands:"
+  echo "  generate <service> --type <type> [opts]"
+  echo "  update [services...] [--force]"
+  echo "  deploy <service>"
+  echo "  help"
+}
+
+case "$CMD" in
+  generate)
+    ensure_templates
+    TEMPLATES_ROOT="$TEMPLATES_ROOT" PROJECT_ROOT_OVERRIDE="$PROJECT_ROOT_OVERRIDE" \
+      bash "$TEMPLATES_ROOT/deployment-templates/generators/generate-multi-service.sh" "$@"
+    ;;
+  update)
+    ensure_templates
+    TEMPLATES_ROOT="$TEMPLATES_ROOT" PROJECT_ROOT_OVERRIDE="$PROJECT_ROOT_OVERRIDE" \
+      bash "$TEMPLATES_ROOT/deployment-templates/update-deployments.sh" "$@"
+    ;;
+  deploy)
+    svc="${1:-}"
+    if [[ -z "$svc" ]]; then echo "Missing service name"; exit 1; fi
+    bash "$PROJECT_ROOT_OVERRIDE/deployments/$svc/deploy.sh"
+    ;;
+  help|*)
+    usage
+    ;;
+esac
+
+

@@ -1,0 +1,12 @@
+tunnel: {{ tunnel_uuid }}
+credentials-file: /root/.cloudflared/{{ tunnel_uuid }}.json
+
+ingress:
+  # Application routing for {{ service_name }}
+  - hostname: {{ app_subdomain }}.{{ cloudflare_domain }}
+    service: http://{{ ansible_host }}:{{ app_port }}
+    originRequest:
+      noTLSVerify: true
+    
+  # Catch-all rule (required)
+  - service: http_status:404

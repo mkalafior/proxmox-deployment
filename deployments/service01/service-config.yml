@@ -25,6 +25,9 @@ app_subdomain: api
 dns_server: 192.168.1.11
 dns_domain: proxmox.local
 
+# Proxmox node override (leave empty to use global default)
+proxmox_node: pve2
+
 # Custom environment variables (add as needed)
 custom_env_vars: {}
 

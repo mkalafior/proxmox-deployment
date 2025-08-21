@@ -453,6 +453,77 @@
           ⚠️  WARNING: DNS resolution failed, service accessible by IP only
           {% endif %}
 
+    # Cloudflare Tunnel Configuration (if enabled)
+    - name: Check if Cloudflare domain is configured
+      set_fact:
+        cloudflare_enabled: "{{ cloudflare_domain is defined and cloudflare_domain != '' }}"
+      
+    - name: Configure Cloudflare tunnel routing
+      block:
+        - name: Get tunnel UUID
+          shell: cloudflared tunnel list | grep 'proxmox-main' | awk '{print $1}'
+          register: tunnel_uuid_result
+          delegate_to: "{{ proxmox_host }}"
+          
+        - name: Set tunnel UUID fact
+          set_fact:
+            tunnel_uuid: "{{ tunnel_uuid_result.stdout.strip() }}"
+            
+        - name: Backup current tunnel configuration
+          copy:
+            src: /etc/cloudflared/config.yml
+            dest: "/etc/cloudflared/config.yml.backup.{{ ansible_date_time.date }}_{{ ansible_date_time.hour }}{{ ansible_date_time.minute }}{{ ansible_date_time.second }}"
+            remote_src: yes
+          delegate_to: "{{ proxmox_host }}"
+          
+        - name: Generate new tunnel configuration
+          template:
+            src: cloudflare-tunnel-config.yml.j2
+            dest: /tmp/new_tunnel_config.yml
+          delegate_to: localhost
+          
+        - name: Upload new tunnel configuration
+          copy:
+            src: /tmp/new_tunnel_config.yml
+            dest: /etc/cloudflared/config.yml
+          delegate_to: "{{ proxmox_host }}"
+          
+        - name: Clean up temporary config file
+          file:
+            path: /tmp/new_tunnel_config.yml
+            state: absent
+          delegate_to: localhost
+          
+        - name: Restart cloudflared service
+          systemd:
+            name: cloudflared
+            state: restarted
+          delegate_to: "{{ proxmox_host }}"
+          
+        - name: Wait for cloudflared to restart
+          pause:
+            seconds: 5
+            
+        - name: Create DNS route for tunnel
+          shell: cloudflared tunnel route dns proxmox-main {{ app_subdomain }}.{{ cloudflare_domain }}
+          delegate_to: "{{ proxmox_host }}"
+          ignore_errors: true
+            
+        - name: Verify cloudflared service status
+          systemd:
+            name: cloudflared
+          register: cloudflared_status
+          delegate_to: "{{ proxmox_host }}"
+          
+        - name: Display Cloudflare tunnel status
+          debug:
+            msg: |
+              Cloudflare Tunnel Status:
+              Service: {{ cloudflared_status.status.ActiveState }}
+              Public URL: https://{{ app_subdomain }}.{{ cloudflare_domain }}
+              
+      when: cloudflare_enabled | bool
+
     - name: Check service status
       systemd:
         name: "{{ app_service_name }}"
