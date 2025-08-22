@@ -62,6 +62,15 @@
         src: "{{ ssh_public_key_path }}"
       register: ssh_public_key_content
 
+    - name: Install Ansible collections from requirements.yml (idempotent)
+      command: ansible-galaxy collection install -r requirements.yml --force
+      args:
+        chdir: "{{ playbook_dir }}"
+      changed_when: false
+      delegate_to: localhost
+      run_once: true
+      become: false
+
     - name: Create Proxmox container via curl command  
       shell: |
         curl -k -X POST \
@@ -125,7 +134,7 @@
           - VMID: {{ container_status_result.json.data.vmid | default('unknown') }}
       when: container_status_result is defined
 
-    - name: Get container network interfaces via Proxmox API
+    - name: Get container network interfaces via Proxmox API (retry until inet appears)
       uri:
         url: "https://{{ proxmox_host }}:8006/api2/json/nodes/{{ proxmox_node }}/lxc/{{ vm_id }}/interfaces"
         method: GET
@@ -136,8 +145,11 @@
         return_content: yes
         status_code: [200, 401, 403, 500]
       register: container_interfaces_result
+      failed_when: false
+      retries: 10
+      delay: 3
+      until: "container_interfaces_result.json is defined and (container_interfaces_result.json.data | selectattr('name','equalto','eth0') | map(attribute='inet') | list | length) > 0"
       when: proxmox_token_id != '' and proxmox_token_secret != ''
-      ignore_errors: true
 
     - name: Debug interfaces API response
       debug:
@@ -148,17 +160,27 @@
           - Data: {{ container_interfaces_result.json.data | default('no data') }}
       when: container_interfaces_result is defined
 
-    - name: Extract container IP from interfaces API response
+    - name: Extract container IP
       set_fact:
-        container_ip: "{{ eth0_interface.inet | regex_replace('/.*$', '') }}"
+        container_ip: "{{ (eth0_interface.inet | default('')) | regex_replace('/.*$', '') }}"
       vars:
         eth0_interface: "{{ container_interfaces_result.json.data | selectattr('name', 'equalto', 'eth0') | first }}"
       when:
-        - container_interfaces_result is defined
-        - container_interfaces_result.status == 200
+        - container_interfaces_result.json is defined
         - container_interfaces_result.json.data is defined
-        - (container_interfaces_result.json.data | selectattr('name', 'equalto', 'eth0') | list | length > 0)
+
+    - name: Fallback - get container IP via pct exec
+      shell: |
+        /usr/sbin/pct exec {{ vm_id }} -- sh -lc "ip -o -4 addr show dev eth0 | awk '{print \\ $4}' | head -n1"
+      register: pct_ip_result
+      changed_when: false
       ignore_errors: true
+      when: container_ip is not defined or (container_ip | default('')) == ''
+
+    - name: Use pct exec result if available
+      set_fact:
+        container_ip: "{{ pct_ip_result.stdout | default('') | trim | regex_replace('/.*$', '') }}"
+      when: pct_ip_result is defined and (pct_ip_result.stdout | default('') | trim) != ''
 
     - name: Fail deployment if IP discovery failed
       fail:
@@ -261,6 +283,8 @@
           - qemu-guest-agent  # For IP address discovery
         state: present
       when: not internet_test.failed
+
+    # (collections are installed in the localhost phase above)
   
     - name: Configure firewall
       ufw:

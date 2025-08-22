@@ -1,0 +1,22 @@
+# Tor Proxy Service Type Configuration
+service_type: tor-proxy
+runtime_name: "Tor Proxy"
+
+# Defaults
+default_ports:
+  socks5: 9050
+  http_proxy: 8118
+
+# Tor tunables
+tor_new_circuit_period: 60          # seconds
+tor_max_circuit_dirtiness: 600      # seconds
+tor_socks_listen: "0.0.0.0"
+privoxy_listen: "0.0.0.0"
+
+# Health check behavior
+health_checks:
+  enable_http_check: true
+  http_probe_url: "https://example.com"
+
+# No special collections required beyond base
+

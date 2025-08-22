@@ -13,10 +13,10 @@ else
 fi
 
 SRC_CLI="$(cd "$(dirname "$0")" && pwd)/proxmox-deploy"
-DEST_CLI="$BIN_DIR/proxmox-deploy"
+DEST_CLI="$BIN_DIR/pxdcli"
 chmod +x "$SRC_CLI"
 ln -sf "$SRC_CLI" "$DEST_CLI"
-echo "Installed proxmox-deploy to $DEST_CLI"
+echo "Installed pxdcli to $DEST_CLI"
 echo "Add $BIN_DIR to your PATH if not present."
 
 

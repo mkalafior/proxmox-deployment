@@ -61,7 +61,7 @@ echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc
 source ~/.bashrc
 
 # Verify
-proxmox-deploy help
+pxdcli help
 ```
 
 ### macOS (zsh)
@@ -75,14 +75,33 @@ echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc
 source ~/.zshrc
 
 # Verify
-proxmox-deploy help
+pxdcli help
 ```
 
 Notes
-- The installer places templates in `~/.proxmox-deploy/templates` and symlinks the CLI to `~/.local/bin/proxmox-deploy`.
+- The installer places templates in `~/.proxmox-deploy/templates` and symlinks the CLI to `~/.local/bin/pxdcli`.
 - The CLI auto-updates templates (`git pull`) on use.
 - To target a different project directory: run commands from that project root. Advanced: set `PROJECT_ROOT_OVERRIDE=/abs/path`.
 - Advanced: point to a custom templates checkout by exporting `TEMPLATES_ROOT=/abs/path/to/templates-root`.
+
+### CLI Troubleshooting (PATH)
+
+If you see `pxdcli: command not found`, ensure `~/.local/bin` is on your PATH.
+
+```bash
+# Check PATH contains ~/.local/bin
+echo $PATH | tr ':' '\n' | grep -x "$HOME/.local/bin" || echo "not-in-PATH"
+
+# Add to PATH (zsh)
+echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc && source ~/.zshrc
+
+# Add to PATH (bash)
+echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc && source ~/.bashrc
+
+# Verify the CLI is installed
+ls -l ~/.local/bin/pxdcli
+pxdcli help
+```
 
 ### CLI Usage (Global Templates)
 
@@ -90,20 +109,20 @@ From the root of your real project (no templates copied):
 
 ```bash
 # 1) Generate a service
-proxmox-deploy generate api-service --type nodejs --runtime bun --vm-id 201 --port 3001
-proxmox-deploy generate postgres-db --type database --runtime postgresql --vm-id 204 --port 5432 \
+pxdcli generate api-service --type nodejs --runtime bun --vm-id 201 --port 3001
+pxdcli generate postgres-db --type database --runtime postgresql --vm-id 204 --port 5432 \
   --db-name myapp --db-user myuser --db-pass secret123
 
 # 2) Update generated deployments after template changes
-proxmox-deploy update --force
+pxdcli update --force
 
 # 3) Deploy a service
-proxmox-deploy deploy postgres-db
+pxdcli deploy postgres-db
 ```
 
 Advanced:
-- Use a different target repo: `PROJECT_ROOT_OVERRIDE=/abs/path proxmox-deploy update --force`
-- Use a custom templates path: `TEMPLATES_ROOT=/abs/path/to/templates proxmox-deploy generate ...`
+- Use a different target repo: `PROJECT_ROOT_OVERRIDE=/abs/path pxdcli update --force`
+- Use a custom templates path: `TEMPLATES_ROOT=/abs/path/to/templates pxdcli generate ...`
 
 ## 🎯 Quick Start
 

@@ -19,11 +19,12 @@ ensure_templates() {
 }
 
 usage() {
-  echo "proxmox-deploy <command> [args]"
+  echo "pxdcli <command> [args]"
   echo "Commands:"
   echo "  generate <service> --type <type> [opts]"
   echo "  update [services...] [--force]"
   echo "  deploy <service>"
+  echo "  restart <service>            # Restart app (or DB service) inside container"
   echo "  help"
 }
 
@@ -42,6 +43,17 @@ case "$CMD" in
     svc="${1:-}"
     if [[ -z "$svc" ]]; then echo "Missing service name"; exit 1; fi
     bash "$PROJECT_ROOT_OVERRIDE/deployments/$svc/deploy.sh"
+    ;;
+  restart)
+    svc="${1:-}"
+    if [[ -z "$svc" ]]; then echo "Missing service name"; exit 1; fi
+    svc_dir="$PROJECT_ROOT_OVERRIDE/deployments/$svc"
+    if [[ -x "$svc_dir/manage.sh" ]]; then
+      ( cd "$svc_dir" && ./manage.sh restart )
+    else
+      echo "manage.sh not found for $svc"
+      exit 1
+    fi
     ;;
   help|*)
     usage

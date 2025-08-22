@@ -62,15 +62,6 @@
         src: "{{ ssh_public_key_path }}"
       register: ssh_public_key_content
 
-    - name: Install Ansible collections from requirements.yml (idempotent)
-      command: ansible-galaxy collection install -r requirements.yml --force
-      args:
-        chdir: "{{ playbook_dir }}"
-      changed_when: false
-      delegate_to: localhost
-      run_once: true
-      become: false
-
     - name: Create Proxmox container via curl command  
       shell: |
         curl -k -X POST \
@@ -284,7 +275,13 @@
         state: present
       when: not internet_test.failed
 
-    # (collections are installed in the localhost phase above)
+    - name: Install Ansible collections from requirements.yml (idempotent)
+      command: ansible-galaxy collection install -r requirements.yml --force
+      args:
+        chdir: "/root"  # requirements.yml is in playbook cwd; ensure safe path
+      changed_when: false
+      delegate_to: localhost
+      run_once: true
   
     - name: Configure firewall
       ufw:

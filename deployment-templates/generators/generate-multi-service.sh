@@ -20,7 +20,7 @@ log_step() { echo -e "${BLUE}[STEP]${NC} $1"; }
 log_type() { echo -e "${CYAN}[TYPE]${NC} $1"; }
 
 # Available service types
-AVAILABLE_TYPES=("nodejs" "python" "golang" "rust" "database" "static")
+AVAILABLE_TYPES=("nodejs" "python" "golang" "rust" "database" "static" "tor-proxy")
 
 show_help() {
     echo "Multi-Language Service Deployment Generator"
@@ -245,6 +245,10 @@ case "$SERVICE_TYPE" in
     static)
         RUNTIME_VARIANT="${RUNTIME_VARIANT:-nginx}"
         APP_MAIN_FILE="${APP_MAIN_FILE:-index.html}"
+        ;;
+    tor-proxy)
+        RUNTIME_VARIANT="${RUNTIME_VARIANT:-tor}"
+        APP_MAIN_FILE="${APP_MAIN_FILE:-}"
         ;;
 esac
 
@@ -535,6 +539,9 @@ EOF
 </html>
 EOF
             ;;
+        tor-proxy)
+            # No app code; configs are handled by deploy template
+            ;;
     esac
     
     log_info "✅ Created $SERVICE_TYPE service starter files"
@@ -590,6 +597,15 @@ db_type: $RUNTIME_VARIANT
 db_name: $DB_NAME
 db_user: $DB_USER
 db_password: $DB_PASSWORD
+EOF
+    fi
+
+    if [[ "$SERVICE_TYPE" == "tor-proxy" ]]; then
+        cat >> "$DEPLOYMENT_DIR/service-config.yml" << EOF
+http_proxy_port: 8118
+custom_env_vars:
+  TOR_NewCircuitPeriod: 60
+  TOR_MaxCircuitDirtiness: 600
 EOF
     fi
 

@@ -27,7 +27,8 @@ DEFAULT_TEMPLATES_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 TEMPLATES_ROOT="${TEMPLATES_ROOT:-${DEFAULT_TEMPLATES_ROOT}}"
 TEMPLATES_BASE="${TEMPLATES_ROOT}/deployment-templates"
 
-TARGET_PROJECT_ROOT="${PROJECT_ROOT_OVERRIDE:-$(cd "${TEMPLATES_ROOT}/.." && pwd)}"
+# Default target project is the project that contains this templates folder
+TARGET_PROJECT_ROOT="${PROJECT_ROOT_OVERRIDE:-${TEMPLATES_ROOT}}"
 DEPLOYMENTS_BASE="${TARGET_PROJECT_ROOT}/deployments"
 
 show_help() {
@@ -404,6 +405,19 @@ update_service() {
     
     if [[ -z "$UPDATE_FILE" || "$UPDATE_FILE" == "templates" ]]; then
         update_service_templates "$service" "$service_type" "$dry_run"
+    fi
+
+    # Ensure DB-specific Ansible collections for database services
+    if [[ "$service_type" == "database" ]]; then
+        local req_file="${DEPLOYMENTS_BASE}/$service/requirements.yml"
+        if [[ -f "$req_file" ]]; then
+            if ! grep -q "community.postgresql" "$req_file"; then
+                printf "\n  - name: community.postgresql\n    version: \"\>=3.0.0\"\n" >> "$req_file"
+            fi
+            if ! grep -q "community.mysql" "$req_file"; then
+                printf "  - name: community.mysql\n    version: \"\>=3.0.0\"\n" >> "$req_file"
+            fi
+        fi
     fi
 }
 

@@ -1,0 +1,11 @@
+---
+- name: Restart {{ service_name }} (python)
+  hosts: proxmox_containers
+  become: true
+  tasks:
+    - name: Restart application unit
+      systemd:
+        name: "{{ app_service_name }}"
+        state: restarted
+        daemon_reload: yes
+

@@ -1,0 +1,15 @@
+---
+- name: Restart {{ service_name }} (tor-proxy)
+  hosts: proxmox_containers
+  become: true
+  tasks:
+    - name: Restart tor
+      systemd:
+        name: tor
+        state: restarted
+
+    - name: Restart privoxy
+      systemd:
+        name: privoxy
+        state: restarted
+

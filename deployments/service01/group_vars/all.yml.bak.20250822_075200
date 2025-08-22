@@ -18,8 +18,7 @@ proxmox_token_secret: "{{ lookup('env', 'TOKEN_SECRET') | default('') }}"
 service_name: service01
 vm_name: service01
 vm_id: 201
-# Use global PROXMOX_NODE or default; no hard override
-# proxmox_node_override: proxmox
+proxmox_node_override: pve2
 vm_cores: 2
 vm_memory: 2048  # MB
 vm_disk_size: 20  # GB
@@ -59,6 +58,3 @@ allowed_ports:
 dns_server: "192.168.1.11"  # CT101 IP address
 dns_domain: "proxmox.local"
 service_hostname: "service01"
-
-# Service type
-service_type: nodejs

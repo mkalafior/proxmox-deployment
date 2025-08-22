@@ -82,16 +82,44 @@ show_logs() {
     "
 }
 
+detect_service_info() {
+    SERVICE_TYPE="$(grep -E '^service_type:' service-config.yml 2>/dev/null | awk -F: '{print $2}' | xargs || true)"
+    if [[ -z "${SERVICE_TYPE}" ]]; then SERVICE_TYPE="nodejs"; fi
+    RUNTIME_VARIANT_CFG="$(grep -E '^(runtime_variant|db_type):' service-config.yml 2>/dev/null | head -n1 | awk -F: '{print $2}' | xargs || true)"
+    APP_UNIT_NAME="$(grep -E '^app_service_name:' service-config.yml 2>/dev/null | awk -F: '{print $2}' | xargs || true)"
+    if [[ -z "${APP_UNIT_NAME}" ]]; then APP_UNIT_NAME="$SERVICE_NAME"; fi
+}
+
+restart_units() {
+    detect_service_info
+    local units_str="${APP_UNIT_NAME}"
+    read -r -a units <<< "$units_str"
+    log_info "Restarting units: ${units[*]}"
+    for u in "${units[@]}"; do
+      ssh -i "${SSH_KEY_PATH}" -o StrictHostKeyChecking=no root@${VM_IP} "systemctl restart $u && systemctl status $u --no-pager | head -n 8" || {
+        log_error "Failed to restart unit: $u"; exit 1;
+      }
+    done
+    log_info "Restart completed"
+}
+
 restart_service() {
     log_info "Restarting $SERVICE_NAME (VM: ${VM_IP})"
-    
-    ssh -i "${SSH_KEY_PATH}" root@${VM_IP} "
-        systemctl restart $SERVICE_NAME
-        sleep 3
-        systemctl status $SERVICE_NAME --no-pager
-    "
-    
-    log_info "✅ $SERVICE_NAME restarted"
+    TYPE_DIR="${SCRIPT_DIR}/../../deployment-templates/service-types"
+    SERVICE_TYPE_CFG=$(grep -E '^service_type:' service-config.yml 2>/dev/null | awk -F: '{print $2}' | xargs || true)
+    if [[ -n "${SERVICE_TYPE_CFG}" && -f "${TYPE_DIR}/${SERVICE_TYPE_CFG}/restart.yml.j2" ]]; then
+        TMP_RESTART="/tmp/${SERVICE_NAME}-restart.yml"
+        sed "s/{{ service_name }}/${SERVICE_NAME}/g" "${TYPE_DIR}/${SERVICE_TYPE_CFG}/restart.yml.j2" > "$TMP_RESTART"
+        cat > /tmp/inventory.ini <<EOF_INV
+[proxmox_containers]
+${VM_IP} ansible_user=root ansible_ssh_private_key_file=${SSH_KEY_PATH}
+EOF_INV
+        ansible-playbook -i /tmp/inventory.ini "$TMP_RESTART"
+        rm -f "$TMP_RESTART" /tmp/inventory.ini
+        log_info "Restart via Ansible completed"
+    else
+        restart_units
+    fi
 }
 
 show_system_info() {
