@@ -379,6 +379,35 @@ update_service_templates() {
     log_info "✅ Updated templates for $service"
 }
 
+# Update deploy.sh to support global env fallback (~/.pxdcli/env.global)
+update_deploy_script() {
+    local service="$1"
+    local deploy_script="${DEPLOYMENTS_BASE}/$service/deploy.sh"
+
+    if [[ ! -f "$deploy_script" ]]; then
+        return 0
+    fi
+
+    log_service "Ensuring deploy.sh env fallback for $service"
+
+    # Backup
+    if [[ "$CREATE_BACKUP" == "true" ]]; then
+        cp "$deploy_script" "${deploy_script}.bak.$(date +%Y%m%d_%H%M%S)"
+    fi
+
+    # Replace the strict load-env block with a fallback-aware block
+    # The pattern matches the original generated block
+    awk '
+      BEGIN {in_block=0}
+      /source \\.\.\/\.\.\/global-config\/load-env\.sh/ {in_block=1; print "# Load environment"; print "if [[ -f ../../global-config/load-env.sh ]]; then"; print "  source ../../global-config/load-env.sh"; print "  if ! load_clean_env \"$SERVICE_NAME\" \"$(pwd)\"; then"; print "      log_error \"Failed to load clean environment\""; print "      exit 1"; print "  fi"; print "else"; print "  if [[ -f \"$HOME/.pxdcli/env.global\" ]]; then"; print "    source \"$HOME/.pxdcli/env.global\""; print "  fi"; print "fi"; next}
+      in_block==1 && /load_clean_env/ { next }
+      in_block==1 && /exit 1/ { next }
+      in_block==1 && /fi/ { in_block=0; next }
+      { print }
+    ' "$deploy_script" > "${deploy_script}.tmp" && mv "${deploy_script}.tmp" "$deploy_script"
+    chmod +x "$deploy_script"
+}
+
 # Update a single service
 update_service() {
     local service="$1"
@@ -405,6 +434,11 @@ update_service() {
     
     if [[ -z "$UPDATE_FILE" || "$UPDATE_FILE" == "templates" ]]; then
         update_service_templates "$service" "$service_type" "$dry_run"
+    fi
+
+    # Always ensure deploy.sh has env fallback unless specific file filter excludes scripts
+    if [[ -z "$UPDATE_FILE" ]]; then
+        update_deploy_script "$service"
     fi
 
     # Ensure DB-specific Ansible collections for database services
