@@ -439,11 +439,20 @@ if [[ ! -f "deploy.yml" ]]; then
     exit 1
 fi
 
-# Load clean environment (prevents variable pollution)
-source ../../global-config/load-env.sh
-if ! load_clean_env "$SERVICE_NAME" "$(pwd)"; then
-    log_error "Failed to load clean environment"
-    exit 1
+# Load environment
+if [[ -f ../../global-config/load-env.sh ]]; then
+  # Preferred: project-local loader
+  source ../../global-config/load-env.sh
+  if ! load_clean_env "$SERVICE_NAME" "$(pwd)"; then
+      log_error "Failed to load clean environment"
+      exit 1
+  fi
+else
+  # Fallback: use global CLI env if present
+  if [[ -f "$HOME/.pxdcli/env.global" ]]; then
+    # shellcheck disable=SC1090
+    source "$HOME/.pxdcli/env.global"
+  fi
 fi
 
 

@@ -9,6 +9,14 @@ TEMPLATES_ROOT_DEFAULT="$HOME/.proxmox-deploy/templates"
 TEMPLATES_ROOT="${TEMPLATES_ROOT:-$TEMPLATES_ROOT_DEFAULT}"
 PROJECT_ROOT_OVERRIDE="${PROJECT_ROOT_OVERRIDE:-$(pwd)}"
 
+# Load global CLI environment (~/.pxdcli/env.global) if present
+PXDCLI_CONFIG_DIR="${PXDCLI_CONFIG_DIR:-$HOME/.pxdcli}"
+PXDCLI_GLOBAL_ENV="${PXDCLI_GLOBAL_ENV:-$PXDCLI_CONFIG_DIR/env.global}"
+if [[ -f "$PXDCLI_GLOBAL_ENV" ]]; then
+  # shellcheck disable=SC1090
+  . "$PXDCLI_GLOBAL_ENV"
+fi
+
 ensure_templates() {
   if [[ ! -d "$TEMPLATES_ROOT/.git" ]]; then
     mkdir -p "$(dirname "$TEMPLATES_ROOT")"
@@ -25,6 +33,7 @@ usage() {
   echo "  update [services...] [--force]"
   echo "  deploy <service>"
   echo "  restart <service>            # Restart app (or DB service) inside container"
+  echo "  nodes                        # List Proxmox nodes (requires TOKEN_ID/TOKEN_SECRET)"
   echo "  help"
 }
 
@@ -42,7 +51,21 @@ case "$CMD" in
   deploy)
     svc="${1:-}"
     if [[ -z "$svc" ]]; then echo "Missing service name"; exit 1; fi
-    bash "$PROJECT_ROOT_OVERRIDE/deployments/$svc/deploy.sh"
+    ( cd "$PROJECT_ROOT_OVERRIDE/deployments/$svc" && ./deploy.sh )
+    ;;
+  nodes)
+    # List Proxmox nodes using API token
+    if [[ -z "${PROXMOX_HOST:-}" || -z "${TOKEN_ID:-}" || -z "${TOKEN_SECRET:-}" ]]; then
+      echo "Missing PROXMOX_HOST/TOKEN_ID/TOKEN_SECRET. Export them or source your global config."
+      exit 1
+    fi
+    RESP=$(curl -ks -H "Authorization: PVEAPIToken=${TOKEN_ID}=${TOKEN_SECRET}" \
+      "https://${PROXMOX_HOST}:8006/api2/json/nodes")
+    if command -v jq >/dev/null 2>&1; then
+      echo "$RESP" | jq -r '.data[] | "\(.node)\tstatus=\(.status)\tmem=\(.mem // 0)/\(.maxmem // 0)"'
+    else
+      echo "$RESP"
+    fi
     ;;
   restart)
     svc="${1:-}"
