@@ -36,10 +36,12 @@ app_dir: /opt/go-api
 app_service_name: go-api
 app_port: 8080
 
+# Service type
+
 # Local source code path
 local_app_path: "../../services/go-api"
 
-# Production Environment Variables
+# Production Environment Variables (apps can ignore if not needed)
 production_env:
   NODE_ENV: production
   PORT: "8080"
@@ -49,7 +51,7 @@ production_env:
 ssh_public_key_path: "{{ ansible_env.HOME }}/.ssh/id_proxmox.pub"
 allowed_ports:
   - "22"    # SSH
-  - "8080"  # Application port
+  - "8080"  # Application/db port
   - "80"    # HTTP (for future use)
   - "443"   # HTTPS (for future use)
 
@@ -57,3 +59,6 @@ allowed_ports:
 dns_server: "192.168.1.11"  # CT101 IP address
 dns_domain: "proxmox.local"
 service_hostname: "go-api"
+
+# Service type
+service_type: nodejs

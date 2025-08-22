@@ -876,4 +876,4 @@ echo "   3. Deploy service: cd deployments/$SERVICE_NAME && ./deploy.sh"
 echo ""
 echo "💡 Quick deploy:"
 echo "   cd deployments/$SERVICE_NAME && ./deploy.sh"
-EOF
+ 

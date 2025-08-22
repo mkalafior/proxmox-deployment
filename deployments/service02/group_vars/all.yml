@@ -18,7 +18,6 @@ proxmox_token_secret: "{{ lookup('env', 'TOKEN_SECRET') | default('') }}"
 service_name: service02
 vm_name: service02
 vm_id: 202
-proxmox_node_override: proxmox
 vm_cores: 2
 vm_memory: 2048  # MB
 vm_disk_size: 20  # GB
@@ -37,21 +36,22 @@ app_dir: /opt/service02
 app_service_name: service02
 app_port: 3002
 
+# Service type
+
 # Local source code path
 local_app_path: "../../services/service02"
 
-# Production Environment Variables
+# Production Environment Variables (apps can ignore if not needed)
 production_env:
   NODE_ENV: production
   PORT: "3002"
   HOST: "0.0.0.0"
-# Custom env vars (none configured)
 
 # Security Configuration
 ssh_public_key_path: "{{ ansible_env.HOME }}/.ssh/id_proxmox.pub"
 allowed_ports:
   - "22"    # SSH
-  - "3002"  # Application port
+  - "3002"  # Application/db port
   - "80"    # HTTP (for future use)
   - "443"   # HTTPS (for future use)
 
@@ -59,3 +59,6 @@ allowed_ports:
 dns_server: "192.168.1.11"  # CT101 IP address
 dns_domain: "proxmox.local"
 service_hostname: "service02"
+
+# Service type
+service_type: nodejs

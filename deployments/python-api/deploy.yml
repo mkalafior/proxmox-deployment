@@ -62,6 +62,15 @@
         src: "{{ ssh_public_key_path }}"
       register: ssh_public_key_content
 
+    - name: Install Ansible collections from requirements.yml (idempotent)
+      command: ansible-galaxy collection install -r requirements.yml --force
+      args:
+        chdir: "{{ playbook_dir }}"
+      changed_when: false
+      delegate_to: localhost
+      run_once: true
+      become: false
+
     - name: Create Proxmox container via curl command  
       shell: |
         curl -k -X POST \
@@ -78,15 +87,18 @@
         var: proxmox_vm
       when: proxmox_vm.failed is defined and proxmox_vm.failed
 
-    - name: Start the container via direct API call
+    - name: Start the container via direct API call (idempotent)
       uri:
         url: "https://{{ proxmox_host }}:8006/api2/json/nodes/{{ proxmox_node }}/lxc/{{ vm_id }}/status/start"
         method: POST
         headers:
           Authorization: "PVEAPIToken={{ proxmox_token_id }}={{ proxmox_token_secret }}"
         validate_certs: "{{ proxmox_api_validate_certs }}"
-        status_code: [200]
+        status_code: [200, 500]
         timeout: 60
+      register: start_result
+      failed_when: false
+      changed_when: "start_result.status == 200"
     
     - name: Wait for container to be fully started
       pause:
@@ -122,7 +134,7 @@
           - VMID: {{ container_status_result.json.data.vmid | default('unknown') }}
       when: container_status_result is defined
 
-    - name: Get container network interfaces via Proxmox API
+    - name: Get container network interfaces via Proxmox API (retry until inet appears)
       uri:
         url: "https://{{ proxmox_host }}:8006/api2/json/nodes/{{ proxmox_node }}/lxc/{{ vm_id }}/interfaces"
         method: GET
@@ -133,8 +145,11 @@
         return_content: yes
         status_code: [200, 401, 403, 500]
       register: container_interfaces_result
+      failed_when: false
+      retries: 10
+      delay: 3
+      until: "container_interfaces_result.json is defined and (container_interfaces_result.json.data | selectattr('name','equalto','eth0') | map(attribute='inet') | list | length) > 0"
       when: proxmox_token_id != '' and proxmox_token_secret != ''
-      ignore_errors: true
 
     - name: Debug interfaces API response
       debug:
@@ -145,17 +160,27 @@
           - Data: {{ container_interfaces_result.json.data | default('no data') }}
       when: container_interfaces_result is defined
 
-    - name: Extract container IP from interfaces API response
+    - name: Extract container IP
       set_fact:
-        container_ip: "{{ eth0_interface.inet | regex_replace('/.*$', '') }}"
+        container_ip: "{{ (eth0_interface.inet | default('')) | regex_replace('/.*$', '') }}"
       vars:
         eth0_interface: "{{ container_interfaces_result.json.data | selectattr('name', 'equalto', 'eth0') | first }}"
       when:
-        - container_interfaces_result is defined
-        - container_interfaces_result.status == 200
+        - container_interfaces_result.json is defined
         - container_interfaces_result.json.data is defined
-        - (container_interfaces_result.json.data | selectattr('name', 'equalto', 'eth0') | list | length > 0)
+
+    - name: Fallback - get container IP via pct exec
+      shell: |
+        /usr/sbin/pct exec {{ vm_id }} -- sh -lc "ip -o -4 addr show dev eth0 | awk '{print \\ $4}' | head -n1"
+      register: pct_ip_result
+      changed_when: false
       ignore_errors: true
+      when: container_ip is not defined or (container_ip | default('')) == ''
+
+    - name: Use pct exec result if available
+      set_fact:
+        container_ip: "{{ pct_ip_result.stdout | default('') | trim | regex_replace('/.*$', '') }}"
+      when: pct_ip_result is defined and (pct_ip_result.stdout | default('') | trim) != ''
 
     - name: Fail deployment if IP discovery failed
       fail:
@@ -258,6 +283,8 @@
           - qemu-guest-agent  # For IP address discovery
         state: present
       when: not internet_test.failed
+
+    # (collections are installed in the localhost phase above)
   
     - name: Configure firewall
       ufw:
@@ -269,6 +296,64 @@
       ufw:
         state: enabled
 
+    - name: Install PostgreSQL
+      apt:
+        name:
+          - postgresql
+          - postgresql-contrib
+          - python3-psycopg2
+        state: present
+      when:
+        - not internet_test.failed
+        - service_type == 'database'
+
+    - name: Ensure PostgreSQL is running
+      systemd:
+        name: postgresql
+        state: started
+        enabled: yes
+      when:
+        - not internet_test.failed
+        - service_type == 'database'
+
+    - name: Discover PostgreSQL config directory
+      shell: |
+        dirname $(readlink -f $(find /etc/postgresql -type f -name postgresql.conf | head -n1))
+      register: pg_conf_dir
+      changed_when: false
+      when: service_type == 'database'
+
+    - name: Configure listen_addresses in postgresql.conf
+      lineinfile:
+        path: "{{ pg_conf_dir.stdout }}/postgresql.conf"
+        regexp: "^#?listen_addresses\\s*=.*"
+        line: "listen_addresses = '*'"
+        backup: yes
+      when: service_type == 'database'
+
+    - name: Ensure pg_hba allows remote connections
+      blockinfile:
+        path: "{{ pg_conf_dir.stdout }}/pg_hba.conf"
+        marker: "# {mark} ANSIBLE MANAGED BLOCK - remote access"
+        block: |
+          host    all             all             0.0.0.0/0               md5
+          host    all             all             ::/0                    md5
+      when: service_type == 'database'
+
+    - name: Restart PostgreSQL to apply config
+      systemd:
+        name: postgresql
+        state: restarted
+      when: service_type == 'database'
+
+    - name: Wait for PostgreSQL to listen on port
+      wait_for:
+        host: 127.0.0.1
+        port: "{{ app_port }}"
+        timeout: 30
+        state: started
+      when: service_type == 'database'
+
     - name: Install Bun runtime system-wide
       shell: |
         curl -fsSL https://bun.sh/install | bash -s "bun-v1.0.20"
@@ -278,15 +363,18 @@
       args:
         creates: /usr/local/bin/bun
       register: bun_install
+      when: service_type != 'database'
 
     - name: Verify Bun installation
       command: bun --version
       register: bun_version
       changed_when: false
+      when: service_type != 'database'
 
     - name: Display Bun version
       debug:
         msg: "Bun version: {{ bun_version.stdout }}"
+      when: service_type != 'database'
 
     - name: Create application user
       user:
@@ -345,12 +433,15 @@
           delegate_to: localhost
           become: false
 
+      when: service_type != 'database'
+
     - name: Set ownership of application files
       file:
         path: "{{ app_dir }}"
         owner: "{{ app_user }}"
         group: "{{ app_user }}"
         recurse: yes
+      when: service_type != 'database'
 
     - name: Install Bun dependencies
       shell: |
@@ -358,6 +449,7 @@
       args:
         chdir: "{{ app_dir }}"
       become_user: "{{ app_user }}"
+      when: service_type != 'database'
 
     - name: Create environment file
       template:
@@ -367,12 +459,29 @@
         group: "{{ app_user }}"
         mode: '0600'
 
+    - name: Initialize PostgreSQL database
+      postgresql_db:
+        name: "{{ db_name | default(service_name) }}"
+        state: present
+      become_user: postgres
+      when: service_type == 'database'
+
+    - name: Create PostgreSQL user
+      postgresql_user:
+        name: "{{ db_user | default(service_name) }}"
+        password: "{{ db_password }}"
+        db: "{{ db_name | default(service_name) }}"
+        priv: ALL
+      become_user: postgres
+      when: service_type == 'database'
+
     - name: Create systemd service file
       template:
         src: "{{ app_service_name }}.service.j2"
         dest: "/etc/systemd/system/{{ app_service_name }}.service"
         mode: '0644'
       notify: reload systemd
+      when: service_type != 'database'
 
     - name: Enable and start application service
       systemd:
@@ -380,10 +489,12 @@
         enabled: yes
         state: started
         daemon_reload: yes
+      when: service_type != 'database'
 
     - name: Wait for service to be running
       pause:
         seconds: 5
+      when: service_type != 'database'
 
     - name: Copy DNS authentication key
       template:
@@ -415,10 +526,9 @@
       debug:
         msg: |
           DNS Test Result for python-api:
-          {{ dns_test_result.stdout }}
-          {% if dns_test_result.stderr %}
-          Errors: {{ dns_test_result.stderr }}
-          {% endif %}
+          rc: {{ dns_test_result.rc | default('n/a') }}
+          stdout: {{ dns_test_result.stdout | default('') }}
+          stderr: {{ dns_test_result.stderr | default('') }}
 
     - name: Create DNS registration service
       template:
@@ -447,11 +557,9 @@
       debug:
         msg: |
           DNS Resolution Test for python-api:
-          {% if dns_resolution_test.rc == 0 %}
-          ✅ SUCCESS: {{ service_hostname }}.{{ dns_domain }} is resolvable
-          {% else %}
-          ⚠️  WARNING: DNS resolution failed, service accessible by IP only
-          {% endif %}
+          rc: {{ dns_resolution_test.rc | default('n/a') }}
+          stdout: {{ dns_resolution_test.stdout | default('') }}
+          stderr: {{ dns_resolution_test.stderr | default('') }}
 
     # Cloudflare Tunnel Configuration (if enabled)
     - name: Check if Cloudflare domain is configured
@@ -528,12 +636,14 @@
       systemd:
         name: "{{ app_service_name }}"
       register: service_status
+      when: service_type != 'database'
 
     - name: Display service status
       debug:
         msg: |
           python-api Service Status: {{ service_status.status.ActiveState }}
           Service is {{ 'running' if service_status.status.ActiveState == 'active' else 'not running' }}
+      when: service_type != 'database'
 
     - name: Test application endpoint
       uri:
@@ -542,23 +652,26 @@
         timeout: 10
       register: health_check
       ignore_errors: yes
+      when: service_type != 'database'
 
     - name: Display health check result
       debug:
         msg: |
-          python-api Health check: {{ 'PASSED' if health_check.status == 200 else 'FAILED' }}
-          {% if health_check.status == 200 %}
-          Application is running at: http://{{ ansible_host }}:{{ app_port }}
-          {% endif %}
+          python-api Health check status: {{ health_check.status | default('unknown') }}
+          Endpoint: http://{{ ansible_host }}:{{ app_port }}/health
+      when: service_type != 'database'
 
     - name: Show recent logs
       command: journalctl -u {{ app_service_name }} --lines=10 --no-pager
       register: service_logs
       changed_when: false
+      when: service_type != 'database'
 
     - name: Display recent logs
       debug:
         var: service_logs.stdout_lines
+      when: service_type != 'database'
+    
 
   handlers:
     - name: reload systemd
