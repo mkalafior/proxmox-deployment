@@ -103,7 +103,7 @@ check_template_modified() {
 # Load service configuration
 load_service_config() {
     local service="$1"
-    local config_file="../deployments/$service/service-config.yml"
+    local config_file="${DEPLOYMENTS_BASE}/$service/service-config.yml"
     
     if [[ ! -f "$config_file" ]]; then
         log_error "Service config not found: $config_file"
