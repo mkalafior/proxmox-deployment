@@ -179,7 +179,7 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-# Validate required arguments
+# Validate or prompt for required arguments
 if [[ -z "$SERVICE_NAME" ]]; then
     log_error "Service name is required"
     show_help
@@ -187,9 +187,8 @@ if [[ -z "$SERVICE_NAME" ]]; then
 fi
 
 if [[ -z "$SERVICE_TYPE" ]]; then
-    log_error "Service type is required (--type)"
-    show_help
-    exit 1
+    echo -n "Service type (${AVAILABLE_TYPES[*]}): "
+    read -r SERVICE_TYPE
 fi
 
 if [[ ! " ${AVAILABLE_TYPES[*]} " =~ " ${SERVICE_TYPE} " ]]; then
@@ -199,25 +198,20 @@ if [[ ! " ${AVAILABLE_TYPES[*]} " =~ " ${SERVICE_TYPE} " ]]; then
 fi
 
 if [[ -z "$VM_ID" ]]; then
-    log_error "VM ID is required (--vm-id)"
-    show_help
-    exit 1
+    echo -n "VM ID: "
+    read -r VM_ID
 fi
 
 if [[ -z "$APP_PORT" ]]; then
-    log_error "Application port is required (--port)"
-    show_help
-    exit 1
+    echo -n "Application port: "
+    read -r APP_PORT
 fi
 
 # Set defaults based on service type
 if [[ -z "$SERVICE_HOSTNAME" ]]; then
     SERVICE_HOSTNAME="$SERVICE_NAME"
 fi
-
-if [[ -z "$APP_SUBDOMAIN" ]]; then
-    APP_SUBDOMAIN="$SERVICE_NAME"
-fi
+# Do NOT default APP_SUBDOMAIN; keep it empty when user leaves blank
 
 # Set runtime defaults
 case "$SERVICE_TYPE" in
@@ -234,7 +228,12 @@ case "$SERVICE_TYPE" in
         APP_MAIN_FILE="${APP_MAIN_FILE:-.}"
         ;;
     database)
-        RUNTIME_VARIANT="${RUNTIME_VARIANT:-postgresql}"
+        # If not provided, prompt for DB type
+        if [[ -z "$RUNTIME_VARIANT" ]]; then
+            echo -n "Database type (postgresql/mysql/redis/mongodb) [postgresql]: "
+            read -r RUNTIME_VARIANT
+            RUNTIME_VARIANT="${RUNTIME_VARIANT:-postgresql}"
+        fi
         DB_NAME="${DB_NAME:-$SERVICE_NAME}"
         DB_USER="${DB_USER:-$SERVICE_NAME}"
         if [[ -z "$DB_PASSWORD" ]]; then
@@ -633,17 +632,32 @@ generate_deployment
 
 # Use the original generator for now (we'll enhance it later)
 log_step "Generating Ansible deployment files..."
-"$TEMPLATES_BASE/generators/generate-service-deployment.sh" \
-    "$SERVICE_NAME" \
-    --vm-id "$VM_ID" \
-    --port "$APP_PORT" \
-    --subdomain "$APP_SUBDOMAIN" \
-    --hostname "$SERVICE_HOSTNAME" \
-    --cores "$VM_CORES" \
-    --memory "$VM_MEMORY" \
-    --disk "$VM_DISK_SIZE" \
-    --user "$APP_USER" \
-    --force
+if [[ -n "$SERVICE_TYPE" ]]; then
+    SERVICE_TYPE_CFG="$SERVICE_TYPE" \
+    "$TEMPLATES_BASE/generators/generate-service-deployment.sh" \
+        "$SERVICE_NAME" \
+        --vm-id "$VM_ID" \
+        --port "$APP_PORT" \
+        $( [[ -n "$APP_SUBDOMAIN" ]] && printf "%s %q" --subdomain "$APP_SUBDOMAIN" ) \
+        --hostname "$SERVICE_HOSTNAME" \
+        --cores "$VM_CORES" \
+        --memory "$VM_MEMORY" \
+        --disk "$VM_DISK_SIZE" \
+        --user "$APP_USER" \
+        --force
+else
+    "$TEMPLATES_BASE/generators/generate-service-deployment.sh" \
+        "$SERVICE_NAME" \
+        --vm-id "$VM_ID" \
+        --port "$APP_PORT" \
+        $( [[ -n "$APP_SUBDOMAIN" ]] && printf "%s %q" --subdomain "$APP_SUBDOMAIN" ) \
+        --hostname "$SERVICE_HOSTNAME" \
+        --cores "$VM_CORES" \
+        --memory "$VM_MEMORY" \
+        --disk "$VM_DISK_SIZE" \
+        --user "$APP_USER" \
+        --force
+fi
 
 echo ""
 echo "🎉 Multi-Language Service Generated!"

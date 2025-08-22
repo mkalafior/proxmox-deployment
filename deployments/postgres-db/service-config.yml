@@ -1,9 +1,11 @@
 # Service configuration for postgres-db
-# Generated on Thu Aug 21 16:05:38 CEST 2025
+# Generated on Fri Aug 22 17:05:48 CEST 2025
 
 service_name: postgres-db
+service_type: database
+runtime_variant: postgresql
 vm_name: postgres-db
-vm_id: 211
+vm_id: 220
 vm_cores: 2
 vm_memory: 2048
 vm_disk_size: 20
@@ -17,10 +19,11 @@ app_user: appuser
 app_dir: /opt/postgres-db
 app_service_name: postgres-db
 app_port: 5432
+app_main_file: 
 local_app_path: "../../services/postgres-db"
 
 service_hostname: postgres-db
-app_subdomain: postgres-db
+app_subdomain: 
 
 dns_server: 192.168.1.11
 dns_domain: proxmox.local
@@ -29,15 +32,13 @@ dns_domain: proxmox.local
 # proxmox_node: pve2
 
 # Service type specific configuration
-service_type: database
-runtime_variant: postgresql
 db_type: postgresql
 db_name: postgres-db
 db_user: postgres-db
-db_password: "secure_postgres_password_123"
+db_password: hdqsj6SxuYRBUZXwdXySKBmEvXElytMZwMJgyVxS0j0=
 
-# Custom environment variables (add as needed)
+# Custom environment variables
 custom_env_vars: {}
 
-# Additional ports to open in firewall (add as needed)
+# Additional ports to open in firewall
 additional_ports: []

@@ -159,9 +159,7 @@ if [[ -z "$SERVICE_HOSTNAME" ]]; then
     SERVICE_HOSTNAME="$SERVICE_NAME"
 fi
 
-if [[ -z "$APP_SUBDOMAIN" ]]; then
-    APP_SUBDOMAIN="$SERVICE_NAME"
-fi
+# Note: leave APP_SUBDOMAIN as provided (can be empty to disable Cloudflare subdomain)
 
 # Validate service name format
 if [[ ! "$SERVICE_NAME" =~ ^[a-z0-9][a-z0-9-]*[a-z0-9]$|^[a-z0-9]$ ]]; then
@@ -287,8 +285,14 @@ APP_DIR="/opt/$SERVICE_NAME"
 APP_SERVICE_NAME="$SERVICE_NAME"
 LOCAL_APP_PATH="../../services/$SERVICE_NAME"
 
-# Create service configuration file
-cat > "$DEPLOYMENT_DIR/service-config.yml" << EOF
+# Ensure safe default for service type (used later if provided by caller)
+SERVICE_TYPE_CFG=""
+
+# Create service configuration file (preserve existing if present)
+if [[ -f "$DEPLOYMENT_DIR/service-config.yml" ]]; then
+  log_step "Preserving existing service-config.yml"
+else
+  cat > "$DEPLOYMENT_DIR/service-config.yml" << EOF
 # Service configuration for $SERVICE_NAME
 # Generated on $(date)
 
@@ -325,16 +329,57 @@ custom_env_vars: {}
 # Additional ports to open in firewall (add as needed)
 additional_ports: []
 EOF
+  # If the generator was invoked with a pre-defined service_type, include it
+  if [[ -n "$SERVICE_TYPE_CFG" ]]; then
+    echo "service_type: $SERVICE_TYPE_CFG" >> "$DEPLOYMENT_DIR/service-config.yml"
+    # Add database-specific defaults if needed
+    if [[ "$SERVICE_TYPE_CFG" == "database" ]]; then
+      RUNTIME_VAL=$(grep -E '^(runtime_variant|db_type):' "$DEPLOYMENT_DIR/service-config.yml" | head -n1 | awk -F: '{print $2}' | xargs || echo "postgresql")
+      echo "runtime_variant: ${RUNTIME_VAL}" >> "$DEPLOYMENT_DIR/service-config.yml"
+      echo "db_type: ${RUNTIME_VAL}" >> "$DEPLOYMENT_DIR/service-config.yml"
+      # Only add db_name/user/pass if missing
+      grep -q '^db_name:' "$DEPLOYMENT_DIR/service-config.yml" || echo "db_name: $SERVICE_NAME" >> "$DEPLOYMENT_DIR/service-config.yml"
+      grep -q '^db_user:' "$DEPLOYMENT_DIR/service-config.yml" || echo "db_user: $SERVICE_NAME" >> "$DEPLOYMENT_DIR/service-config.yml"
+      if ! grep -q '^db_password:' "$DEPLOYMENT_DIR/service-config.yml"; then
+        if command -v openssl >/dev/null 2>&1; then
+          GENPW=$(openssl rand -base64 24 | tr -d '\n')
+        else
+          GENPW=$(LC_ALL=C tr -dc 'A-Za-z0-9' </dev/urandom | head -c 24)
+        fi
+        echo "db_password: \"$GENPW\"" >> "$DEPLOYMENT_DIR/service-config.yml"
+      fi
+    fi
+  fi
+fi
 
 # Generate Ansible playbook using sed replacements
 log_step "Generating Ansible playbook..."
 
+# Prefer service-type specific templates if available
+SERVICE_TYPE_CFG=""
+if [[ -f "$DEPLOYMENT_DIR/service-config.yml" ]]; then
+    SERVICE_TYPE_CFG=$(grep -E '^service_type:' "$DEPLOYMENT_DIR/service-config.yml" | awk -F: '{print $2}' | xargs || true)
+fi
+TYPE_TEMPLATE_DIR="$TEMPLATES_BASE/service-types/${SERVICE_TYPE_CFG}"
+
+# Choose deploy template
+DEPLOY_TEMPLATE_FILE="$TEMPLATE_DIR/deploy.yml.j2"
+if [[ -n "$SERVICE_TYPE_CFG" && -f "$TYPE_TEMPLATE_DIR/deploy.yml.j2" ]]; then
+    DEPLOY_TEMPLATE_FILE="$TYPE_TEMPLATE_DIR/deploy.yml.j2"
+fi
+
 # Copy and customize deploy.yml
-cp "$TEMPLATE_DIR/deploy.yml.j2" "$DEPLOYMENT_DIR/deploy.yml"
+cp "$DEPLOY_TEMPLATE_FILE" "$DEPLOYMENT_DIR/deploy.yml"
 sed -i '' "s/{{ service_name }}/$SERVICE_NAME/g" "$DEPLOYMENT_DIR/deploy.yml"
 
+# Choose group_vars template (prefer service-type specific)
+GROUP_VARS_TEMPLATE_FILE="$TEMPLATE_DIR/group_vars/all.yml.j2"
+if [[ -n "$SERVICE_TYPE_CFG" && -f "$TYPE_TEMPLATE_DIR/group_vars/all.yml.j2" ]]; then
+    GROUP_VARS_TEMPLATE_FILE="$TYPE_TEMPLATE_DIR/group_vars/all.yml.j2"
+fi
+
 # Copy and customize group_vars/all.yml
-cp "$TEMPLATE_DIR/group_vars/all.yml.j2" "$DEPLOYMENT_DIR/group_vars/all.yml"
+cp "$GROUP_VARS_TEMPLATE_FILE" "$DEPLOYMENT_DIR/group_vars/all.yml"
 sed -i '' "s/{{ service_name }}/$SERVICE_NAME/g" "$DEPLOYMENT_DIR/group_vars/all.yml"
 sed -i '' "s/{{ vm_name }}/$VM_NAME/g" "$DEPLOYMENT_DIR/group_vars/all.yml"
 sed -i '' "s/{{ vm_id }}/$VM_ID/g" "$DEPLOYMENT_DIR/group_vars/all.yml"
@@ -360,6 +405,33 @@ sed -i '' '/{% if proxmox_node_override %}/,/{% endif %}/d' "$DEPLOYMENT_DIR/gro
 # Remove template-specific syntax that doesn't apply
 sed -i '' '/{% if custom_env_vars %}/,/{% endif %}/d' "$DEPLOYMENT_DIR/group_vars/all.yml"
 sed -i '' '/{% if additional_ports %}/,/{% endif %}/d' "$DEPLOYMENT_DIR/group_vars/all.yml"
+
+# Inject database variables for database services
+if [[ "$SERVICE_TYPE_CFG" == "database" ]]; then
+    DB_NAME_VAL=$(grep -E '^db_name:' "$DEPLOYMENT_DIR/service-config.yml" | awk -F: '{print $2}' | xargs || echo "$SERVICE_NAME")
+    DB_USER_VAL=$(grep -E '^db_user:' "$DEPLOYMENT_DIR/service-config.yml" | awk -F: '{print $2}' | xargs || echo "$SERVICE_NAME")
+    DB_PASS_VAL=$(grep -E '^db_password:' "$DEPLOYMENT_DIR/service-config.yml" | cut -d: -f2- | xargs || true)
+    RUNTIME_VAL=$(grep -E '^(runtime_variant|db_type):' "$DEPLOYMENT_DIR/service-config.yml" | head -n1 | awk -F: '{print $2}' | xargs || echo "postgresql")
+    ensure_kv() {
+        local key="$1"; shift
+        local value="$1"; shift
+        if grep -q "^${key}:" "$DEPLOYMENT_DIR/group_vars/all.yml"; then
+            sed -i '' "s|^${key}:.*|${key}: ${value}|" "$DEPLOYMENT_DIR/group_vars/all.yml"
+        else
+            printf "%s: %s\n" "${key}" "${value}" >> "$DEPLOYMENT_DIR/group_vars/all.yml"
+        fi
+    }
+    ensure_kv "service_type" "database"
+    ensure_kv "runtime_variant" "${RUNTIME_VAL}"
+    ensure_kv "db_type" "${RUNTIME_VAL}"
+    ensure_kv "db_name" "${DB_NAME_VAL}"
+    ensure_kv "db_user" "${DB_USER_VAL}"
+    if grep -q "^db_password:" "$DEPLOYMENT_DIR/group_vars/all.yml"; then
+        sed -i '' "s|^db_password:.*|db_password: \"${DB_PASS_VAL}\"|" "$DEPLOYMENT_DIR/group_vars/all.yml"
+    else
+        printf "db_password: \"%s\"\n" "${DB_PASS_VAL}" >> "$DEPLOYMENT_DIR/group_vars/all.yml"
+    fi
+fi
 
 log_info "✅ Generated Ansible configuration"
 
@@ -439,20 +511,21 @@ if [[ ! -f "deploy.yml" ]]; then
     exit 1
 fi
 
-# Load environment
-if [[ -f ../../global-config/load-env.sh ]]; then
-  # Preferred: project-local loader
-  source ../../global-config/load-env.sh
-  if ! load_clean_env "$SERVICE_NAME" "$(pwd)"; then
-      log_error "Failed to load clean environment"
-      exit 1
-  fi
-else
-  # Fallback: use global CLI env if present
-  if [[ -f "$HOME/.pxdcli/env.global" ]]; then
-    # shellcheck disable=SC1090
-    source "$HOME/.pxdcli/env.global"
-  fi
+# Load global CLI env and service overrides
+if [[ -f "$HOME/.pxdcli/env.global" ]]; then
+  # shellcheck disable=SC1090
+  source "$HOME/.pxdcli/env.global"
+fi
+if [[ -f ./env.service ]]; then
+  # shellcheck disable=SC1091
+  source ./env.service
+fi
+
+# Extract key values from service-config.yml if unset
+if [[ -f "service-config.yml" ]]; then
+  VM_ID="${VM_ID:-$(grep -E '^vm_id:' service-config.yml | awk -F: '{print $2}' | xargs || true)}"
+  APP_PORT="${APP_PORT:-$(grep -E '^app_port:' service-config.yml | awk -F: '{print $2}' | xargs || true)}"
+  SERVICE_HOSTNAME="${SERVICE_HOSTNAME:-$(grep -E '^service_hostname:' service-config.yml | awk -F: '{print $2}' | xargs || true)}"
 fi
 
 

@@ -1,0 +1,23 @@
+[Unit]
+Description=DNS Auto-Registration Service for {{ service_hostname | default(app_name) }}
+After=network-online.target
+Wants=network-online.target
+Before={{ app_service_name }}.service
+
+[Service]
+Type=forking
+ExecStart=/opt/dns-register.sh monitor
+ExecStop=/opt/dns-register.sh cleanup
+PIDFile=/var/run/dns-register.pid
+Restart=always
+RestartSec=30
+User=root
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=dns-register
+
+# Ensure the service starts after network is ready
+TimeoutStartSec=30
+
+[Install]
+WantedBy=multi-user.target

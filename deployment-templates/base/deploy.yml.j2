@@ -100,17 +100,45 @@
       failed_when: false
       changed_when: "start_result.status == 200"
     
-    - name: Wait for container to be fully started
-      pause:
-        seconds: 5
+    - name: Define backoff delays for slow PVE clusters
+      set_fact:
+        pxd_backoff_delays: [20, 30, 30, 60, 60]
 
-    - name: Wait for container to get IP address
-      pause:
-        seconds: 10
-        
-    - name: Wait for container to get DHCP IP assignment
-      pause:
-        seconds: 15
+    - name: Try IP discovery with progressive backoff - pause then query interfaces
+      block:
+        - name: Pause before IP discovery ({{ wait_seconds }}s)
+          pause:
+            seconds: "{{ wait_seconds }}"
+          when: (container_ip | default('')) == ''
+
+        - name: Get container network interfaces via Proxmox API
+          uri:
+            url: "https://{{ proxmox_host }}:8006/api2/json/nodes/{{ proxmox_node }}/lxc/{{ vm_id }}/interfaces"
+            method: GET
+            headers:
+              Authorization: "PVEAPIToken={{ proxmox_token_id }}={{ proxmox_token_secret }}"
+            validate_certs: "{{ proxmox_api_validate_certs }}"
+            timeout: 30
+            return_content: yes
+            status_code: [200, 401, 403, 500]
+          register: container_interfaces_result
+          failed_when: false
+          when: (container_ip | default('')) == '' and (proxmox_token_id != '' and proxmox_token_secret != '')
+
+        - name: Set container IP from interfaces if available
+          set_fact:
+            container_ip: "{{ (eth0_interface.inet | default('')) | regex_replace('/.*$', '') }}"
+          vars:
+            eth0_interface: "{{ container_interfaces_result.json.data | selectattr('name', 'equalto', 'eth0') | first }}"
+          when:
+            - (container_ip | default('')) == ''
+            - container_interfaces_result is defined
+            - container_interfaces_result.json is defined
+            - container_interfaces_result.json.data is defined
+            - (container_interfaces_result.json.data | selectattr('name','equalto','eth0') | list | length) > 0
+      loop: "{{ pxd_backoff_delays }}"
+      loop_control:
+        loop_var: wait_seconds
 
     - name: Verify container is running before IP discovery
       uri:
@@ -134,22 +162,7 @@
           - VMID: {{ container_status_result.json.data.vmid | default('unknown') }}
       when: container_status_result is defined
 
-    - name: Get container network interfaces via Proxmox API (retry until inet appears)
-      uri:
-        url: "https://{{ proxmox_host }}:8006/api2/json/nodes/{{ proxmox_node }}/lxc/{{ vm_id }}/interfaces"
-        method: GET
-        headers:
-          Authorization: "PVEAPIToken={{ proxmox_token_id }}={{ proxmox_token_secret }}"
-        validate_certs: "{{ proxmox_api_validate_certs }}"
-        timeout: 30
-        return_content: yes
-        status_code: [200, 401, 403, 500]
-      register: container_interfaces_result
-      failed_when: false
-      retries: 10
-      delay: 3
-      until: "container_interfaces_result.json is defined and (container_interfaces_result.json.data | selectattr('name','equalto','eth0') | map(attribute='inet') | list | length) > 0"
-      when: proxmox_token_id != '' and proxmox_token_secret != ''
+    # Old retry removed in favor of progressive backoff above
 
     - name: Debug interfaces API response
       debug:
@@ -175,6 +188,9 @@
       register: pct_ip_result
       changed_when: false
       ignore_errors: true
+      delegate_to: "{{ proxmox_host }}"
+      environment:
+        PATH: "/usr/sbin:/usr/bin:/bin:/sbin"
       when: container_ip is not defined or (container_ip | default('')) == ''
 
     - name: Use pct exec result if available

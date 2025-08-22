@@ -1,0 +1,59 @@
+---
+# Service-specific variables for go-api
+# Generated from template - do not edit directly
+
+# Import global defaults
+# Proxmox Configuration
+proxmox_host: "{{ lookup('env', 'PROXMOX_HOST') | default('192.168.1.100') }}"
+proxmox_user: "{{ lookup('env', 'PROXMOX_USER') | default('root@pam') }}"
+proxmox_password: "{{ lookup('env', 'PROXMOX_PASSWORD') }}"
+proxmox_node: "{{ proxmox_node_override | default(lookup('env', 'PROXMOX_NODE')) | default('proxmox') }}"
+proxmox_api_validate_certs: false
+
+# Proxmox API Token Authentication (preferred for automation)
+proxmox_token_id: "{{ lookup('env', 'TOKEN_ID') | default('') }}"
+proxmox_token_secret: "{{ lookup('env', 'TOKEN_SECRET') | default('') }}"
+
+# Service-specific configuration
+service_name: go-api
+vm_name: go-api
+vm_id: 212
+vm_cores: 2
+vm_memory: 2048  # MB
+vm_disk_size: 20  # GB
+vm_storage: local-lvm
+vm_os_template: "{{ lookup('env', 'VM_TEMPLATE') | default('local:vztmpl/ubuntu-24.04-standard_24.04-2_amd64.tar.zst') }}"
+
+# Network Configuration  
+vm_network_bridge: vmbr0
+vm_swap: 512  # MB
+vm_unprivileged: true
+
+# Application Configuration
+app_name: go-api
+app_user: appuser
+app_dir: /opt/go-api
+app_service_name: go-api
+app_port: 8080
+
+# Local source code path
+local_app_path: "../../services/go-api"
+
+# Production Environment Variables
+production_env:
+  NODE_ENV: production
+  PORT: "8080"
+  HOST: "0.0.0.0"
+
+# Security Configuration
+ssh_public_key_path: "{{ ansible_env.HOME }}/.ssh/id_proxmox.pub"
+allowed_ports:
+  - "22"    # SSH
+  - "8080"  # Application port
+  - "80"    # HTTP (for future use)
+  - "443"   # HTTPS (for future use)
+
+# DNS Configuration for service hostname resolution
+dns_server: "192.168.1.11"  # CT101 IP address
+dns_domain: "proxmox.local"
+service_hostname: "go-api"

@@ -48,17 +48,46 @@ show_help() {
 }
 
 check_vm_access() {
-    if ! ssh -i "${SSH_KEY_PATH}" -o ConnectTimeout=5 -o BatchMode=yes root@${VM_IP} "echo 'OK'" &>/dev/null; then
+    if ! ssh -i "${SSH_KEY_PATH}" -o ConnectTimeout=5 -o BatchMode=yes -o StrictHostKeyChecking=no root@${VM_IP} "echo 'OK'" &>/dev/null; then
         log_error "Cannot connect to $SERVICE_NAME VM at ${VM_IP}"
         exit 1
     fi
+}
+
+detect_service_info() {
+    SERVICE_TYPE="$(grep -E '^service_type:' service-config.yml 2>/dev/null | awk -F: '{print $2}' | xargs || true)"
+    if [[ -z "${SERVICE_TYPE}" ]]; then SERVICE_TYPE="nodejs"; fi
+    RUNTIME_VARIANT_CFG="$(grep -E '^(runtime_variant|db_type):' service-config.yml 2>/dev/null | head -n1 | awk -F: '{print $2}' | xargs || true)"
+    APP_UNIT_NAME="$(grep -E '^app_service_name:' service-config.yml 2>/dev/null | awk -F: '{print $2}' | xargs || true)"
+    if [[ -z "${APP_UNIT_NAME}" ]]; then APP_UNIT_NAME="$SERVICE_NAME"; fi
+}
+
+restart_units() {
+    detect_service_info
+    # Load restart units from service-type script if present
+    local units_str=""
+    local type_dir="$(cd "${SCRIPT_DIR}/../../deployment-templates/service-types" && pwd)"
+    if [[ -n "${SERVICE_TYPE}" && -f "${type_dir}/${SERVICE_TYPE}/restart.sh" ]]; then
+      units_str="$(bash "${type_dir}/${SERVICE_TYPE}/restart.sh")"
+    else
+      units_str="${APP_UNIT_NAME}"
+    fi
+    read -r -a units <<< "$units_str"
+
+    log_info "Restarting units: ${units[*]}"
+    for u in "${units[@]}"; do
+      ssh -i "${SSH_KEY_PATH}" -o StrictHostKeyChecking=no root@${VM_IP} "systemctl restart $u && systemctl status $u --no-pager | head -n 8" || {
+        log_error "Failed to restart unit: $u"; exit 1;
+      }
+    done
+    log_info "Restart completed"
 }
 
 show_status() {
     log_info "$SERVICE_NAME Status (VM: ${VM_IP})"
     echo ""
     
-    ssh -i "${SSH_KEY_PATH}" root@${VM_IP} "
+    ssh -i "${SSH_KEY_PATH}" -o StrictHostKeyChecking=no root@${VM_IP} "
         echo '🔍 Service Status:'
         systemctl status $SERVICE_NAME --no-pager || echo 'Service not found'
         echo ''
@@ -76,7 +105,7 @@ show_logs() {
     log_info "$SERVICE_NAME Logs (VM: ${VM_IP})"
     echo ""
     
-    ssh -i "${SSH_KEY_PATH}" root@${VM_IP} "
+    ssh -i "${SSH_KEY_PATH}" -o StrictHostKeyChecking=no root@${VM_IP} "
         echo '📝 Recent Application Logs:'
         journalctl -u $SERVICE_NAME --no-pager -n 50
     "
@@ -84,14 +113,26 @@ show_logs() {
 
 restart_service() {
     log_info "Restarting $SERVICE_NAME (VM: ${VM_IP})"
-    
-    ssh -i "${SSH_KEY_PATH}" root@${VM_IP} "
-        systemctl restart $SERVICE_NAME
-        sleep 3
-        systemctl status $SERVICE_NAME --no-pager
-    "
-    
-    log_info "✅ $SERVICE_NAME restarted"
+    # Prepare a minimal, transient inventory and run service-type restart playbook if present
+    TYPE_DIR="${SCRIPT_DIR}/../../deployment-templates/service-types"
+    SERVICE_TYPE_CFG=$(grep -E '^service_type:' service-config.yml 2>/dev/null | awk -F: '{print $2}' | xargs || true)
+    RESTART_PLAY=""
+    if [[ -n "${SERVICE_TYPE_CFG}" && -f "${TYPE_DIR}/${SERVICE_TYPE_CFG}/restart.yml.j2" ]]; then
+        # Render restart playbook by simple token replacement (service_name)
+        TMP_RESTART="/tmp/${SERVICE_NAME}-restart.yml"
+        sed "s/{{ service_name }}/${SERVICE_NAME}/g" "${TYPE_DIR}/${SERVICE_TYPE_CFG}/restart.yml.j2" > "$TMP_RESTART"
+        # Create transient inventory
+        cat > /tmp/inventory.ini <<EOF_INV
+[proxmox_containers]
+${VM_IP} ansible_user=root ansible_ssh_private_key_file=${SSH_KEY_PATH}
+EOF_INV
+        ansible-playbook -i /tmp/inventory.ini "$TMP_RESTART" -e "@group_vars/all.yml"
+        rm -f "$TMP_RESTART" /tmp/inventory.ini
+        log_info "Restart via Ansible completed"
+    else
+        # Fallback to unit-based restart
+        restart_units
+    fi
 }
 
 show_system_info() {

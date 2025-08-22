@@ -246,12 +246,9 @@ generate_service() {
         fi
     done
     
-    # Get subdomain (optional)
+    # Get subdomain (optional). If left blank, keep empty (no default)
     local app_subdomain
-    read -p "Cloudflare subdomain (optional, default: $service_name): " app_subdomain
-    if [[ -z "$app_subdomain" ]]; then
-        app_subdomain="$service_name"
-    fi
+    read -p "Cloudflare subdomain (optional, leave blank to disable): " app_subdomain
     
     # Get hostname (optional)
     local service_hostname
@@ -260,18 +257,33 @@ generate_service() {
         service_hostname="$service_name"
     fi
     
-    # Run generator
+    # Ask for service type and optional runtime/db type
+    local service_type
+    read -p "Service type (nodejs/python/golang/rust/database/static/tor-proxy): " service_type
+    # Normalize to lowercase in a way compatible with older macOS bash
+    service_type=$(echo "$service_type" | tr '[:upper:]' '[:lower:]')
+    local runtime_variant=""
+    if [[ "$service_type" == "nodejs" ]]; then
+        read -p "Node runtime (node/bun) [bun]: " runtime_variant
+        runtime_variant=${runtime_variant:-bun}
+    elif [[ "$service_type" == "database" ]]; then
+        read -p "Database type (postgresql/mysql/redis/mongodb) [postgresql]: " runtime_variant
+        runtime_variant=${runtime_variant:-postgresql}
+    fi
+
+    # Run enhanced multi-service generator
     log_step "Running service generator..."
-    if [[ -f "deployment-templates/generators/generate-service-deployment.sh" ]]; then
-        ./deployment-templates/generators/generate-service-deployment.sh \
-            "$service_name" \
-            --vm-id "$vm_id" \
-            --port "$app_port" \
-            --subdomain "$app_subdomain" \
-            --hostname "$service_hostname" \
-            --force
+    if [[ -f "deployment-templates/generators/generate-multi-service.sh" ]]; then
+        cmd=("./deployment-templates/generators/generate-multi-service.sh" "$service_name" --type "$service_type" --vm-id "$vm_id" --port "$app_port" --hostname "$service_hostname" --force)
+        if [[ -n "$runtime_variant" ]]; then
+            cmd+=(--runtime "$runtime_variant")
+        fi
+        if [[ -n "$app_subdomain" ]]; then
+            cmd+=(--subdomain "$app_subdomain")
+        fi
+        "${cmd[@]}"
     else
-        log_error "Service generator not found"
+        log_error "Multi-service generator not found"
         return 1
     fi
 }

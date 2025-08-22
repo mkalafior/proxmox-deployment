@@ -213,7 +213,7 @@ Deploy different services to different Proxmox nodes by configuring `deployments
 
 ```yaml
 # Proxmox node override (leave empty to use global default)
-proxmox_node: pve-node-2  # Deploy this service to specific node
+proxmox_node: pve  # Deploy this service to specific node
 ```
 
 **Workflow:**

@@ -58,11 +58,13 @@
       failed_when: false
       changed_when: "start_result.status == 200"
 
-    - name: Pause to allow boot
+    # Progressive backoff attempts for slow PVE clusters (20, 30, 30, 60, 60)
+    - name: Backoff attempt 1 - wait 20s
       pause:
-        seconds: 10
+        seconds: 20
+      when: (container_ip | default('')) == ''
 
-    - name: Get container network interfaces via Proxmox API (retry until inet appears)
+    - name: Query interfaces after attempt 1
       uri:
         url: "https://{{ proxmox_host }}:8006/api2/json/nodes/{{ proxmox_node }}/lxc/{{ vm_id }}/interfaces"
         method: GET
@@ -73,9 +75,139 @@
         status_code: [200, 401, 403, 500]
       register: container_interfaces_result
       failed_when: false
-      retries: 10
-      delay: 3
-      until: "container_interfaces_result.json is defined and (container_interfaces_result.json.data | selectattr('name','equalto','eth0') | map(attribute='inet') | list | length) > 0"
+      when: (container_ip | default('')) == ''
+
+    - name: Set container IP after attempt 1
+      set_fact:
+        container_ip: "{{ (eth0_interface.inet | default('')) | regex_replace('/.*$', '') }}"
+      vars:
+        eth0_interface: "{{ container_interfaces_result.json.data | selectattr('name', 'equalto', 'eth0') | first }}"
+      when:
+        - (container_ip | default('')) == ''
+        - container_interfaces_result is defined
+        - container_interfaces_result.json is defined
+        - container_interfaces_result.json.data is defined
+        - (container_interfaces_result.json.data | selectattr('name','equalto','eth0') | list | length) > 0
+
+    - name: Backoff attempt 2 - wait 30s
+      pause:
+        seconds: 30
+      when: (container_ip | default('')) == ''
+
+    - name: Query interfaces after attempt 2
+      uri:
+        url: "https://{{ proxmox_host }}:8006/api2/json/nodes/{{ proxmox_node }}/lxc/{{ vm_id }}/interfaces"
+        method: GET
+        headers:
+          Authorization: "PVEAPIToken={{ proxmox_token_id }}={{ proxmox_token_secret }}"
+        validate_certs: "{{ proxmox_api_validate_certs }}"
+        return_content: yes
+        status_code: [200, 401, 403, 500]
+      register: container_interfaces_result
+      failed_when: false
+      when: (container_ip | default('')) == ''
+
+    - name: Set container IP after attempt 2
+      set_fact:
+        container_ip: "{{ (eth0_interface.inet | default('')) | regex_replace('/.*$', '') }}"
+      vars:
+        eth0_interface: "{{ container_interfaces_result.json.data | selectattr('name', 'equalto', 'eth0') | first }}"
+      when:
+        - (container_ip | default('')) == ''
+        - container_interfaces_result is defined
+        - container_interfaces_result.json is defined
+        - container_interfaces_result.json.data is defined
+        - (container_interfaces_result.json.data | selectattr('name','equalto','eth0') | list | length) > 0
+
+    - name: Backoff attempt 3 - wait 30s
+      pause:
+        seconds: 30
+      when: (container_ip | default('')) == ''
+
+    - name: Query interfaces after attempt 3
+      uri:
+        url: "https://{{ proxmox_host }}:8006/api2/json/nodes/{{ proxmox_node }}/lxc/{{ vm_id }}/interfaces"
+        method: GET
+        headers:
+          Authorization: "PVEAPIToken={{ proxmox_token_id }}={{ proxmox_token_secret }}"
+        validate_certs: "{{ proxmox_api_validate_certs }}"
+        return_content: yes
+        status_code: [200, 401, 403, 500]
+      register: container_interfaces_result
+      failed_when: false
+      when: (container_ip | default('')) == ''
+
+    - name: Set container IP after attempt 3
+      set_fact:
+        container_ip: "{{ (eth0_interface.inet | default('')) | regex_replace('/.*$', '') }}"
+      vars:
+        eth0_interface: "{{ container_interfaces_result.json.data | selectattr('name', 'equalto', 'eth0') | first }}"
+      when:
+        - (container_ip | default('')) == ''
+        - container_interfaces_result is defined
+        - container_interfaces_result.json is defined
+        - container_interfaces_result.json.data is defined
+        - (container_interfaces_result.json.data | selectattr('name','equalto','eth0') | list | length) > 0
+
+    - name: Backoff attempt 4 - wait 60s
+      pause:
+        seconds: 60
+      when: (container_ip | default('')) == ''
+
+    - name: Query interfaces after attempt 4
+      uri:
+        url: "https://{{ proxmox_host }}:8006/api2/json/nodes/{{ proxmox_node }}/lxc/{{ vm_id }}/interfaces"
+        method: GET
+        headers:
+          Authorization: "PVEAPIToken={{ proxmox_token_id }}={{ proxmox_token_secret }}"
+        validate_certs: "{{ proxmox_api_validate_certs }}"
+        return_content: yes
+        status_code: [200, 401, 403, 500]
+      register: container_interfaces_result
+      failed_when: false
+      when: (container_ip | default('')) == ''
+
+    - name: Set container IP after attempt 4
+      set_fact:
+        container_ip: "{{ (eth0_interface.inet | default('')) | regex_replace('/.*$', '') }}"
+      vars:
+        eth0_interface: "{{ container_interfaces_result.json.data | selectattr('name', 'equalto', 'eth0') | first }}"
+      when:
+        - (container_ip | default('')) == ''
+        - container_interfaces_result is defined
+        - container_interfaces_result.json is defined
+        - container_interfaces_result.json.data is defined
+        - (container_interfaces_result.json.data | selectattr('name','equalto','eth0') | list | length) > 0
+
+    - name: Backoff attempt 5 - wait 60s
+      pause:
+        seconds: 60
+      when: (container_ip | default('')) == ''
+
+    - name: Query interfaces after attempt 5
+      uri:
+        url: "https://{{ proxmox_host }}:8006/api2/json/nodes/{{ proxmox_node }}/lxc/{{ vm_id }}/interfaces"
+        method: GET
+        headers:
+          Authorization: "PVEAPIToken={{ proxmox_token_id }}={{ proxmox_token_secret }}"
+        validate_certs: "{{ proxmox_api_validate_certs }}"
+        return_content: yes
+        status_code: [200, 401, 403, 500]
+      register: container_interfaces_result
+      failed_when: false
+      when: (container_ip | default('')) == ''
+
+    - name: Set container IP after attempt 5
+      set_fact:
+        container_ip: "{{ (eth0_interface.inet | default('')) | regex_replace('/.*$', '') }}"
+      vars:
+        eth0_interface: "{{ container_interfaces_result.json.data | selectattr('name', 'equalto', 'eth0') | first }}"
+      when:
+        - (container_ip | default('')) == ''
+        - container_interfaces_result is defined
+        - container_interfaces_result.json is defined
+        - container_interfaces_result.json.data is defined
+        - (container_interfaces_result.json.data | selectattr('name','equalto','eth0') | list | length) > 0
 
     - name: Extract container IP
       set_fact:
@@ -192,6 +324,14 @@
         backup: yes
       when: db_type == 'postgresql'
 
+    - name: Configure PostgreSQL port in postgresql.conf
+      lineinfile:
+        path: "{{ pg_conf_dir.stdout }}/postgresql.conf"
+        regexp: "^#?port\\s*=.*"
+        line: "port = {{ app_port }}"
+        backup: yes
+      when: db_type == 'postgresql'
+
     - name: Ensure pg_hba allows remote connections
       blockinfile:
         path: "{{ pg_conf_dir.stdout }}/pg_hba.conf"
@@ -219,6 +359,8 @@
       postgresql_db:
         name: "{{ db_name | default(service_name) }}"
         state: present
+        port: "{{ app_port }}"
+        login_unix_socket: "/var/run/postgresql"
       become_user: postgres
       when: db_type == 'postgresql'
 
@@ -226,8 +368,21 @@
       postgresql_user:
         name: "{{ db_user | default(service_name) }}"
         password: "{{ db_password }}"
-        db: "{{ db_name | default(service_name) }}"
-        priv: ALL
+        state: present
+        port: "{{ app_port }}"
+        login_unix_socket: "/var/run/postgresql"
+      become_user: postgres
+      when: db_type == 'postgresql'
+
+    - name: Grant ALL privileges on database to user
+      community.postgresql.postgresql_privs:
+        database: "{{ db_name | default(service_name) }}"
+        type: database
+        roles: "{{ db_user | default(service_name) }}"
+        privs: ALL
+        state: present
+        port: "{{ app_port }}"
+        login_unix_socket: "/var/run/postgresql"
       become_user: postgres
       when: db_type == 'postgresql'
 

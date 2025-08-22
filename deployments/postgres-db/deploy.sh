@@ -28,11 +28,21 @@ if [[ ! -f "deploy.yml" ]]; then
     exit 1
 fi
 
-# Load clean environment (prevents variable pollution)
-source ../../global-config/load-env.sh
-if ! load_clean_env "$SERVICE_NAME" "$(pwd)"; then
-    log_error "Failed to load clean environment"
-    exit 1
+# Load global CLI env and service overrides
+if [[ -f "$HOME/.pxdcli/env.global" ]]; then
+  # shellcheck disable=SC1090
+  source "$HOME/.pxdcli/env.global"
+fi
+if [[ -f ./env.service ]]; then
+  # shellcheck disable=SC1091
+  source ./env.service
+fi
+
+# Extract key values from service-config.yml if unset
+if [[ -f "service-config.yml" ]]; then
+  VM_ID="${VM_ID:-$(grep -E '^vm_id:' service-config.yml | awk -F: '{print $2}' | xargs || true)}"
+  APP_PORT="${APP_PORT:-$(grep -E '^app_port:' service-config.yml | awk -F: '{print $2}' | xargs || true)}"
+  SERVICE_HOSTNAME="${SERVICE_HOSTNAME:-$(grep -E '^service_hostname:' service-config.yml | awk -F: '{print $2}' | xargs || true)}"
 fi
 
 

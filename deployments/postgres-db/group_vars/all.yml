@@ -1,8 +1,7 @@
 ---
 # Service-specific variables for postgres-db
-# Generated from template - do not edit directly
+# Database service type group vars
 
-# Import global defaults
 # Proxmox Configuration
 proxmox_host: "{{ lookup('env', 'PROXMOX_HOST') | default('192.168.1.100') }}"
 proxmox_user: "{{ lookup('env', 'PROXMOX_USER') | default('root@pam') }}"
@@ -17,7 +16,7 @@ proxmox_token_secret: "{{ lookup('env', 'TOKEN_SECRET') | default('') }}"
 # Service-specific configuration
 service_name: postgres-db
 vm_name: postgres-db
-vm_id: 211
+vm_id: 220
 vm_cores: 2
 vm_memory: 2048  # MB
 vm_disk_size: 20  # GB
@@ -36,7 +35,8 @@ app_dir: /opt/postgres-db
 app_service_name: postgres-db
 app_port: 5432
 
-# Service type
+# Service type (concrete to avoid templating recursion)
+service_type: database
 
 # Local source code path
 local_app_path: "../../services/postgres-db"
@@ -51,18 +51,23 @@ production_env:
 ssh_public_key_path: "{{ ansible_env.HOME }}/.ssh/id_proxmox.pub"
 allowed_ports:
   - "22"    # SSH
-  - "5432"  # Application/db port
-  - "80"    # HTTP (for future use)
-  - "443"   # HTTPS (for future use)
+  - "5432"  # DB port
+  - "80"
+  - "443"
 
 # DNS Configuration for service hostname resolution
-dns_server: "192.168.1.11"  # CT101 IP address
+dns_server: "192.168.1.11"
 dns_domain: "proxmox.local"
 service_hostname: "postgres-db"
 
-# Service type
-service_type: database
+# Database-specific values are injected by the generator/update script if not present
+# db_type: postgresql
+# db_name: {{ db_name | default(service_name) }}
+# db_user: {{ db_user | default(service_name) }}
+# db_password: "<generated-or-provided>"
+
+runtime_variant: postgresql
+db_type: postgresql
 db_name: postgres-db
 db_user: postgres-db
-db_password: "secure_postgres_password_123"
-runtime_variant: postgresql
+db_password: "hdqsj6SxuYRBUZXwdXySKBmEvXElytMZwMJgyVxS0j0="

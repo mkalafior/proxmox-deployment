@@ -324,6 +324,7 @@ update_group_vars() {
         else
             ensure_kv "runtime_variant" "postgresql"
         fi
+        ensure_kv "db_type" "${db_type:-${runtime_variant:-postgresql}}"
     fi
 
     log_info "✅ Updated group_vars/all.yml for $service"

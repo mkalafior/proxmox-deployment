@@ -37,7 +37,7 @@ app_service_name: {{ app_service_name }}
 app_port: {{ app_port }}
 
 # Service type
-service_type: {{ service_type | default('nodejs') }}
+service_type: "{{ service_type | default('nodejs') }}"
 
 # Local source code path
 local_app_path: "{{ local_app_path }}"

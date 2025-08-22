@@ -8,7 +8,7 @@
 
 ## Connection String
 ```
-postgresql://postgres-db:secure_postgres_password_123@postgres-db.proxmox.local:5432/postgres-db
+postgresql://postgres-db:hdqsj6SxuYRBUZXwdXySKBmEvXElytMZwMJgyVxS0j0=@postgres-db.proxmox.local:5432/postgres-db
 ```
 
 ## Management
