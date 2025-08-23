@@ -391,6 +391,19 @@
         group: privoxy
         mode: '0644'
 
+    - name: Fix privoxy file permissions
+      file:
+        path: "{{ item }}"
+        owner: privoxy
+        group: privoxy
+        mode: '0644'
+      loop:
+        - /etc/privoxy/default.action
+        - /etc/privoxy/default.filter
+        - /etc/privoxy/user.action
+        - /etc/privoxy/user.filter
+        - /etc/privoxy/regression-tests.action
+
     - name: Open firewall ports (22, socks, http_proxy)
       ufw:
         rule: allow
