@@ -1,10 +1,10 @@
-# Service configuration for service01
-# Generated on Sat Aug 23 09:12:16 CEST 2025
+# Service configuration for service04
+# Generated on Sat Aug 23 09:11:14 CEST 2025
 
-service_name: service01
+service_name: service04
 service_type: nodejs
 runtime_variant: bun
-vm_name: service01
+vm_name: service04
 vm_id: 100
 vm_cores: 2
 vm_memory: 2048
@@ -14,15 +14,15 @@ vm_network_bridge: vmbr0
 vm_swap: 512
 vm_unprivileged: true
 
-app_name: service01
+app_name: service04
 app_user: appuser
-app_dir: /opt/service01
-app_service_name: service01
-app_port: 3440
+app_dir: /opt/service04
+app_service_name: service04
+app_port: 3009
 app_main_file: index.js
-local_app_path: "../../services/service01"
+local_app_path: "../../services/service04"
 
-service_hostname: service01
+service_hostname: service04
 app_subdomain: 
 
 dns_server: 192.168.1.11

@@ -223,18 +223,198 @@ generate_service() {
     echo "🚀 Generating new service: $service_name"
     echo "========================================"
     echo ""
-    
-    # Get VM ID
-    local vm_id
-    while true; do
-        read -p "VM ID (e.g., 203): " vm_id
-        if [[ "$vm_id" =~ ^[0-9]+$ ]]; then
-            break
-        else
-            log_error "VM ID must be a number"
+
+    # Load environment configuration if available
+    if [[ -f "$HOME/.pxdcli/env.global" ]]; then
+        # shellcheck disable=SC1090
+        source "$HOME/.pxdcli/env.global"
+    fi
+
+    # Function to fetch available Proxmox nodes
+    fetch_proxmox_nodes() {
+        if [[ -z "${PROXMOX_HOST:-}" ]]; then
+            log_error "PROXMOX_HOST not set. Please configure your Proxmox connection."
+            return 1
         fi
-    done
-    
+
+        if [[ -z "${TOKEN_ID:-}" || -z "${TOKEN_SECRET:-}" ]]; then
+            log_error "TOKEN_ID and TOKEN_SECRET not set. Please configure your Proxmox API token."
+            return 1
+        fi
+
+        local response
+        response=$(curl -ks -H "Authorization: PVEAPIToken=${TOKEN_ID}=${TOKEN_SECRET}" \
+            "https://${PROXMOX_HOST}:8006/api2/json/nodes" 2>/dev/null)
+
+        if [[ $? -ne 0 ]]; then
+            log_error "Failed to connect to Proxmox API"
+            return 1
+        fi
+
+        if command -v jq >/dev/null 2>&1; then
+            echo "$response" | jq -r '.data[] | "\(.node)"' 2>/dev/null || echo ""
+        else
+            # Fallback parsing without jq
+            echo "$response" | grep -o '"node":"[^"]*"' | cut -d'"' -f4 || echo ""
+        fi
+    }
+
+    # Function to select Proxmox node
+    select_proxmox_node() {
+        local nodes
+        nodes=$(fetch_proxmox_nodes)
+
+        if [[ $? -ne 0 ]]; then
+            log_warn "Could not fetch nodes from API, using default"
+            echo "pve"  # Default fallback
+            return 0
+        fi
+
+        if [[ -z "$nodes" ]]; then
+            log_warn "No nodes found from API, using default"
+            echo "pve"  # Default fallback
+            return 0
+        fi
+
+        # Convert to array
+        local node_array=()
+        while IFS= read -r line; do
+            if [[ -n "$line" ]]; then
+                node_array+=("$line")
+            fi
+        done <<< "$nodes"
+
+        if [[ ${#node_array[@]} -eq 1 ]]; then
+            log_info "Using single available node: ${node_array[0]}"
+            echo "${node_array[0]}"
+            return 0
+        elif [[ ${#node_array[@]} -gt 1 ]]; then
+            # Show available nodes first (to stderr so it doesn't get captured by command substitution)
+            echo "Available Proxmox nodes:" >&2
+            for i in "${!node_array[@]}"; do
+                echo "  $((i+1)). ${node_array[$i]}" >&2
+            done
+            echo "" >&2
+
+            local choice
+            while true; do
+                read -p "Select target node (1-${#node_array[@]}): " choice >&2
+                if [[ "$choice" =~ ^[0-9]+$ ]] && [[ "$choice" -ge 1 ]] && [[ "$choice" -le ${#node_array[@]} ]]; then
+                    local selected_node="${node_array[$((choice-1))]}"
+                    # Only the final result goes to stdout (this is what gets captured)
+                    echo "$selected_node"
+                    return 0
+                else
+                    echo "Invalid choice. Please select a number between 1 and ${#node_array[@]}." >&2
+                fi
+            done
+        else
+            log_warn "No nodes found from API, using default"
+            echo "pve"  # Default fallback
+            return 0
+        fi
+    }
+
+    # Function to fetch VM IDs from node
+    fetch_vm_ids_from_node() {
+        local node="$1"
+
+        if [[ -z "$node" ]]; then
+            return 1
+        fi
+
+        # Suppress all output from curl and API calls
+        local response
+        response=$(curl -ks -H "Authorization: PVEAPIToken=${TOKEN_ID}=${TOKEN_SECRET}" \
+            "https://${PROXMOX_HOST}:8006/api2/json/nodes/$node/qemu" 2>/dev/null)
+
+        if [[ $? -ne 0 ]]; then
+            return 1
+        fi
+
+        if command -v jq >/dev/null 2>&1; then
+            echo "$response" | jq -r '.data[] | "\(.vmid)"' 2>/dev/null | sort -n || echo ""
+        else
+            # Fallback parsing without jq
+            echo "$response" | grep -o '"vmid":[0-9]*' | cut -d':' -f2 | sort -n || echo ""
+        fi
+    }
+
+    # Function to find first available VM ID
+    find_first_available_vmid() {
+        local node="$1"
+        local used_vmids
+        local vmid=100  # Start from VMID 100
+
+        # Get all used VMIDs from the node
+        used_vmids=$(fetch_vm_ids_from_node "$node" 2>/dev/null 1>/dev/null)
+
+        # Convert to array
+        local used_array=()
+        while IFS= read -r line; do
+            if [[ -n "$line" && "$line" =~ ^[0-9]+$ ]]; then
+                used_array+=("$line")
+            fi
+        done <<< "$used_vmids"
+
+        # Find first available VMID starting from 100
+        while [[ $vmid -lt 10000 ]]; do
+            local found=false
+            if [[ ${#used_array[@]} -gt 0 ]]; then
+                for used in "${used_array[@]}"; do
+                    if [[ "$vmid" == "$used" ]]; then
+                        found=true
+                        break
+                    fi
+                done
+            fi
+
+            if [[ "$found" == "false" ]]; then
+                echo "$vmid"
+                return 0
+            fi
+
+            ((vmid++))
+        done
+
+        echo "100"  # Fallback
+        return 0
+    }
+
+    # FIRST STEP: Ask for node selection
+    echo "🔍 Step 1: Target Node Selection"
+    echo "================================"
+    local proxmox_node
+    proxmox_node=$(select_proxmox_node)
+
+    if [[ $? -ne 0 || -z "$proxmox_node" ]]; then
+        proxmox_node="pve"  # Default fallback
+        log_warn "⚠️  Using default node: $proxmox_node"
+    fi
+
+    # SECOND STEP: Auto-select VM ID
+    echo ""
+    echo "🔢 Step 2: VM ID Assignment"
+    echo "=========================="
+    local vm_id
+
+    if [[ -n "$proxmox_node" ]]; then
+        vm_id=$(find_first_available_vmid "$proxmox_node")
+        if [[ $? -eq 0 && -n "$vm_id" ]]; then
+            log_info "✅ Auto-selected VM ID: $vm_id on node $proxmox_node"
+        else
+            vm_id="100"  # Fallback
+            log_warn "⚠️  Could not fetch VM IDs from $proxmox_node, using default: $vm_id"
+        fi
+    else
+        vm_id="100"  # Fallback
+        log_warn "⚠️  Invalid node, using default VM ID: $vm_id"
+    fi
+
+    echo ""
+    echo "⚙️  Step 3: Service Configuration"
+    echo "==============================="
+
     # Get port
     local app_port
     while true; do
@@ -274,7 +454,7 @@ generate_service() {
     # Run enhanced multi-service generator
     log_step "Running service generator..."
     if [[ -f "deployment-templates/generators/generate-multi-service.sh" ]]; then
-        cmd=("./deployment-templates/generators/generate-multi-service.sh" "$service_name" --type "$service_type" --vm-id "$vm_id" --port "$app_port" --hostname "$service_hostname" --force)
+        cmd=("./deployment-templates/generators/generate-multi-service.sh" "$service_name" --type "$service_type" --port "$app_port" --hostname "$service_hostname" --node "$proxmox_node" --vm-id "$vm_id" --force)
         if [[ -n "$runtime_variant" ]]; then
             cmd+=(--runtime "$runtime_variant")
         fi

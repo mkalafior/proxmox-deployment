@@ -1,0 +1,10 @@
+---
+# Dynamic inventory for service03 - will be populated during deployment
+all:
+  children:
+    proxmox_vms:
+      hosts:
+        # VMs will be added here dynamically during deployment
+    proxmox_servers:
+      hosts:
+        # Proxmox host will be added here if needed

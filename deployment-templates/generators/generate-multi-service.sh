@@ -19,6 +19,146 @@ log_error() { echo -e "${RED}[ERROR]${NC} $1"; }
 log_step() { echo -e "${BLUE}[STEP]${NC} $1"; }
 log_type() { echo -e "${CYAN}[TYPE]${NC} $1"; }
 
+# Proxmox API functions
+fetch_proxmox_nodes() {
+    if [[ -z "${PROXMOX_HOST:-}" ]]; then
+        log_error "PROXMOX_HOST not set. Please configure your Proxmox connection."
+        exit 1
+    fi
+
+    if [[ -z "${TOKEN_ID:-}" || -z "${TOKEN_SECRET:-}" ]]; then
+        log_error "TOKEN_ID and TOKEN_SECRET not set. Please configure your Proxmox API token."
+        exit 1
+    fi
+
+    log_step "Fetching available Proxmox nodes..."
+
+    local response
+    response=$(curl -ks -H "Authorization: PVEAPIToken=${TOKEN_ID}=${TOKEN_SECRET}" \
+        "https://${PROXMOX_HOST}:8006/api2/json/nodes" 2>/dev/null)
+
+    if [[ $? -ne 0 ]]; then
+        log_error "Failed to connect to Proxmox API"
+        exit 1
+    fi
+
+    if command -v jq >/dev/null 2>&1; then
+        echo "$response" | jq -r '.data[] | "\(.node)"' 2>/dev/null || echo ""
+    else
+        # Fallback parsing without jq
+        echo "$response" | grep -o '"node":"[^"]*"' | cut -d'"' -f4 || echo ""
+    fi
+}
+
+fetch_vm_ids_from_node() {
+    local node="$1"
+
+    if [[ -z "$node" ]]; then
+        log_error "Node name is required"
+        return 1
+    fi
+
+    log_step "Fetching VM IDs from node $node..."
+
+    local response
+    response=$(curl -ks -H "Authorization: PVEAPIToken=${TOKEN_ID}=${TOKEN_SECRET}" \
+        "https://${PROXMOX_HOST}:8006/api2/json/nodes/$node/qemu" 2>/dev/null)
+
+    if [[ $? -ne 0 ]]; then
+        log_error "Failed to fetch VMs from node $node"
+        return 1
+    fi
+
+    if command -v jq >/dev/null 2>&1; then
+        echo "$response" | jq -r '.data[] | "\(.vmid)"' 2>/dev/null | sort -n || echo ""
+    else
+        # Fallback parsing without jq
+        echo "$response" | grep -o '"vmid":[0-9]*' | cut -d':' -f2 | sort -n || echo ""
+    fi
+}
+
+find_first_available_vmid() {
+    local node="$1"
+    local used_vmids
+    local vmid=100  # Start from VMID 100
+
+    # Get all used VMIDs from the node
+    used_vmids=$(fetch_vm_ids_from_node "$node")
+
+    # Convert to array
+    local used_array=()
+    while IFS= read -r line; do
+        if [[ -n "$line" && "$line" =~ ^[0-9]+$ ]]; then
+            used_array+=("$line")
+        fi
+    done <<< "$used_vmids"
+
+    # Find first available VMID starting from 100
+    while [[ $vmid -lt 10000 ]]; do
+        local found=false
+        if [[ ${#used_array[@]} -gt 0 ]]; then
+            for used in "${used_array[@]}"; do
+                if [[ "$vmid" == "$used" ]]; then
+                    found=true
+                    break
+                fi
+            done
+        fi
+
+        if [[ "$found" == "false" ]]; then
+            echo "$vmid"
+            return 0
+        fi
+
+        ((vmid++))
+    done
+
+    log_error "No available VMID found (all IDs 100-9999 are in use)"
+    return 1
+}
+
+select_proxmox_node() {
+    local nodes
+    nodes=$(fetch_proxmox_nodes)
+
+    if [[ -z "$nodes" ]]; then
+        log_error "No Proxmox nodes found or unable to connect"
+        exit 1
+    fi
+
+    # Convert to array
+    local node_array=()
+    while IFS= read -r line; do
+        if [[ -n "$line" ]]; then
+            node_array+=("$line")
+        fi
+    done <<< "$nodes"
+
+    if [[ ${#node_array[@]} -eq 1 ]]; then
+        log_info "Using single available node: ${node_array[0]}"
+        echo "${node_array[0]}"
+        return 0
+    fi
+
+    echo ""
+    echo "Available Proxmox nodes:"
+    for i in "${!node_array[@]}"; do
+        echo "  $((i+1)). ${node_array[$i]}"
+    done
+    echo ""
+
+    local choice
+    while true; do
+        read -p "Select node (1-${#node_array[@]}): " choice
+        if [[ "$choice" =~ ^[0-9]+$ ]] && [[ "$choice" -ge 1 ]] && [[ "$choice" -le ${#node_array[@]} ]]; then
+            echo "${node_array[$((choice-1))]}"
+            return 0
+        else
+            echo "Invalid choice. Please select a number between 1 and ${#node_array[@]}."
+        fi
+    done
+}
+
 # Available service types
 AVAILABLE_TYPES=("nodejs" "python" "golang" "rust" "database" "static" "tor-proxy")
 
@@ -32,7 +172,6 @@ show_help() {
     echo ""
     echo "Required Options:"
     echo "  --type TYPE     Service type: ${AVAILABLE_TYPES[*]}"
-    echo "  --vm-id ID      VM ID for Proxmox"
     echo "  --port PORT     Application port"
     echo ""
     echo "Service Type Options:"
@@ -43,6 +182,8 @@ show_help() {
     echo "  --db-pass PASS  Database password (for database type)"
     echo ""
     echo "General Options:"
+    echo "  --node NODE     Proxmox node (optional, will prompt for selection)"
+    echo "  --vm-id ID      VM ID for Proxmox (optional, will auto-select first available)"
     echo "  --subdomain SUB Cloudflare subdomain (optional)"
     echo "  --hostname HOST Service hostname for DNS (optional, defaults to service-name)"
     echo "  --cores N       CPU cores (default: 2)"
@@ -82,6 +223,7 @@ SERVICE_NAME=""
 SERVICE_TYPE=""
 RUNTIME_VARIANT=""
 VM_ID=""
+PROXMOX_NODE=""
 APP_PORT=""
 APP_SUBDOMAIN=""
 SERVICE_HOSTNAME=""
@@ -107,6 +249,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --vm-id)
             VM_ID="$2"
+            shift 2
+            ;;
+        --node)
+            PROXMOX_NODE="$2"
             shift 2
             ;;
         --port)
@@ -197,14 +343,34 @@ if [[ ! " ${AVAILABLE_TYPES[*]} " =~ " ${SERVICE_TYPE} " ]]; then
     exit 1
 fi
 
-if [[ -z "$VM_ID" ]]; then
-    echo -n "VM ID: "
-    read -r VM_ID
-fi
-
 if [[ -z "$APP_PORT" ]]; then
     echo -n "Application port: "
     read -r APP_PORT
+fi
+
+# Load environment configuration if available
+if [[ -f "$HOME/.pxdcli/env.global" ]]; then
+    # shellcheck disable=SC1090
+    source "$HOME/.pxdcli/env.global"
+fi
+
+# Handle node selection
+if [[ -z "$PROXMOX_NODE" ]]; then
+    PROXMOX_NODE=$(select_proxmox_node)
+    if [[ $? -ne 0 ]]; then
+        exit 1
+    fi
+fi
+
+# Handle VM ID selection
+if [[ -z "$VM_ID" ]]; then
+    VM_ID=$(find_first_available_vmid "$PROXMOX_NODE")
+    if [[ $? -ne 0 ]]; then
+        exit 1
+    fi
+    log_info "Auto-selected VM ID: $VM_ID on node $PROXMOX_NODE"
+else
+    log_info "Using specified VM ID: $VM_ID on node $PROXMOX_NODE"
 fi
 
 # Set defaults based on service type
@@ -279,6 +445,7 @@ echo ""
 echo "📋 Configuration:"
 echo "   Service Name: $SERVICE_NAME"
 echo "   Service Type: $SERVICE_TYPE ($RUNTIME_VARIANT)"
+echo "   Proxmox Node: $PROXMOX_NODE"
 echo "   VM ID: $VM_ID"
 echo "   App Port: $APP_PORT"
 echo "   Main File: $APP_MAIN_FILE"
@@ -585,7 +752,7 @@ dns_server: 192.168.1.11
 dns_domain: proxmox.local
 
 # Proxmox node override (leave empty to use global default)
-# proxmox_node: pve2
+proxmox_node: $PROXMOX_NODE
 
 # Service type specific configuration
 EOF

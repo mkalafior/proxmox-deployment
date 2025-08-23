@@ -28,6 +28,146 @@ log_step() {
     echo -e "${BLUE}[STEP]${NC} $1"
 }
 
+# Proxmox API functions
+fetch_proxmox_nodes() {
+    if [[ -z "${PROXMOX_HOST:-}" ]]; then
+        log_error "PROXMOX_HOST not set. Please configure your Proxmox connection."
+        exit 1
+    fi
+
+    if [[ -z "${TOKEN_ID:-}" || -z "${TOKEN_SECRET:-}" ]]; then
+        log_error "TOKEN_ID and TOKEN_SECRET not set. Please configure your Proxmox API token."
+        exit 1
+    fi
+
+    log_step "Fetching available Proxmox nodes..."
+
+    local response
+    response=$(curl -ks -H "Authorization: PVEAPIToken=${TOKEN_ID}=${TOKEN_SECRET}" \
+        "https://${PROXMOX_HOST}:8006/api2/json/nodes" 2>/dev/null)
+
+    if [[ $? -ne 0 ]]; then
+        log_error "Failed to connect to Proxmox API"
+        exit 1
+    fi
+
+    if command -v jq >/dev/null 2>&1; then
+        echo "$response" | jq -r '.data[] | "\(.node)"' 2>/dev/null || echo ""
+    else
+        # Fallback parsing without jq
+        echo "$response" | grep -o '"node":"[^"]*"' | cut -d'"' -f4 || echo ""
+    fi
+}
+
+fetch_vm_ids_from_node() {
+    local node="$1"
+
+    if [[ -z "$node" ]]; then
+        log_error "Node name is required"
+        return 1
+    fi
+
+    log_step "Fetching VM IDs from node $node..."
+
+    local response
+    response=$(curl -ks -H "Authorization: PVEAPIToken=${TOKEN_ID}=${TOKEN_SECRET}" \
+        "https://${PROXMOX_HOST}:8006/api2/json/nodes/$node/qemu" 2>/dev/null)
+
+    if [[ $? -ne 0 ]]; then
+        log_error "Failed to fetch VMs from node $node"
+        return 1
+    fi
+
+    if command -v jq >/dev/null 2>&1; then
+        echo "$response" | jq -r '.data[] | "\(.vmid)"' 2>/dev/null | sort -n || echo ""
+    else
+        # Fallback parsing without jq
+        echo "$response" | grep -o '"vmid":[0-9]*' | cut -d':' -f2 | sort -n || echo ""
+    fi
+}
+
+find_first_available_vmid() {
+    local node="$1"
+    local used_vmids
+    local vmid=100  # Start from VMID 100
+
+    # Get all used VMIDs from the node
+    used_vmids=$(fetch_vm_ids_from_node "$node")
+
+    # Convert to array
+    local used_array=()
+    while IFS= read -r line; do
+        if [[ -n "$line" && "$line" =~ ^[0-9]+$ ]]; then
+            used_array+=("$line")
+        fi
+    done <<< "$used_vmids"
+
+    # Find first available VMID starting from 100
+    while [[ $vmid -lt 10000 ]]; do
+        local found=false
+        if [[ ${#used_array[@]} -gt 0 ]]; then
+            for used in "${used_array[@]}"; do
+                if [[ "$vmid" == "$used" ]]; then
+                    found=true
+                    break
+                fi
+            done
+        fi
+
+        if [[ "$found" == "false" ]]; then
+            echo "$vmid"
+            return 0
+        fi
+
+        ((vmid++))
+    done
+
+    log_error "No available VMID found (all IDs 100-9999 are in use)"
+    return 1
+}
+
+select_proxmox_node() {
+    local nodes
+    nodes=$(fetch_proxmox_nodes)
+
+    if [[ -z "$nodes" ]]; then
+        log_error "No Proxmox nodes found or unable to connect"
+        exit 1
+    fi
+
+    # Convert to array
+    local node_array=()
+    while IFS= read -r line; do
+        if [[ -n "$line" ]]; then
+            node_array+=("$line")
+        fi
+    done <<< "$nodes"
+
+    if [[ ${#node_array[@]} -eq 1 ]]; then
+        log_info "Using single available node: ${node_array[0]}"
+        echo "${node_array[0]}"
+        return 0
+    fi
+
+    echo ""
+    echo "Available Proxmox nodes:"
+    for i in "${!node_array[@]}"; do
+        echo "  $((i+1)). ${node_array[$i]}"
+    done
+    echo ""
+
+    local choice
+    while true; do
+        read -p "Select node (1-${#node_array[@]}): " choice
+        if [[ "$choice" =~ ^[0-9]+$ ]] && [[ "$choice" -ge 1 ]] && [[ "$choice" -le ${#node_array[@]} ]]; then
+            echo "${node_array[$((choice-1))]}"
+            return 0
+        else
+            echo "Invalid choice. Please select a number between 1 and ${#node_array[@]}."
+        fi
+    done
+}
+
 # Default configuration
 DEFAULT_VM_CORES=2
 DEFAULT_VM_MEMORY=2048
@@ -46,8 +186,9 @@ show_help() {
     echo "  service-name    Name of the service to generate deployment for"
     echo ""
     echo "Options:"
-    echo "  --vm-id ID      VM ID for Proxmox (required)"
     echo "  --port PORT     Application port (required)"
+    echo "  --node NODE     Proxmox node (optional, will prompt for selection)"
+    echo "  --vm-id ID      VM ID for Proxmox (optional, will auto-select first available)"
     echo "  --subdomain SUB Cloudflare subdomain (optional)"
     echo "  --hostname HOST Service hostname for DNS (optional, defaults to service-name)"
     echo "  --cores N       CPU cores (default: $DEFAULT_VM_CORES)"
@@ -58,15 +199,16 @@ show_help() {
     echo "  --help          Show this help message"
     echo ""
     echo "Examples:"
-    echo "  $0 service01 --vm-id 201 --port 3001"
-    echo "  $0 api-service --vm-id 202 --port 8080 --subdomain api --cores 4"
-    echo "  $0 worker --vm-id 203 --port 3003 --hostname background-worker"
+    echo "  $0 service01 --port 3001"
+    echo "  $0 api-service --port 8080 --subdomain api --cores 4"
+    echo "  $0 worker --port 3003 --node proxmox-node1 --hostname background-worker"
 }
 
 # Parse command line arguments
 SERVICE_NAME=""
 VM_ID=""
 APP_PORT=""
+PROXMOX_NODE=""
 APP_SUBDOMAIN=""
 SERVICE_HOSTNAME=""
 VM_CORES="$DEFAULT_VM_CORES"
@@ -83,6 +225,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --port)
             APP_PORT="$2"
+            shift 2
+            ;;
+        --node)
+            PROXMOX_NODE="$2"
             shift 2
             ;;
         --subdomain)
@@ -142,16 +288,35 @@ if [[ -z "$SERVICE_NAME" ]]; then
     exit 1
 fi
 
-if [[ -z "$VM_ID" ]]; then
-    log_error "VM ID is required (--vm-id)"
-    show_help
-    exit 1
-fi
-
 if [[ -z "$APP_PORT" ]]; then
     log_error "Application port is required (--port)"
     show_help
     exit 1
+fi
+
+# Load environment configuration if available
+if [[ -f "$HOME/.pxdcli/env.global" ]]; then
+    # shellcheck disable=SC1090
+    source "$HOME/.pxdcli/env.global"
+fi
+
+# Handle node selection
+if [[ -z "$PROXMOX_NODE" ]]; then
+    PROXMOX_NODE=$(select_proxmox_node)
+    if [[ $? -ne 0 ]]; then
+        exit 1
+    fi
+fi
+
+# Handle VM ID selection
+if [[ -z "$VM_ID" ]]; then
+    VM_ID=$(find_first_available_vmid "$PROXMOX_NODE")
+    if [[ $? -ne 0 ]]; then
+        exit 1
+    fi
+    log_info "Auto-selected VM ID: $VM_ID on node $PROXMOX_NODE"
+else
+    log_info "Using specified VM ID: $VM_ID on node $PROXMOX_NODE"
 fi
 
 # Set defaults for optional parameters
@@ -191,6 +356,7 @@ echo "==============================="
 echo ""
 echo "📋 Configuration:"
 echo "   Service Name: $SERVICE_NAME"
+echo "   Proxmox Node: $PROXMOX_NODE"
 echo "   VM ID: $VM_ID"
 echo "   App Port: $APP_PORT"
 echo "   Subdomain: $APP_SUBDOMAIN"
@@ -321,7 +487,7 @@ dns_server: $DEFAULT_DNS_SERVER
 dns_domain: $DEFAULT_DNS_DOMAIN
 
 # Proxmox node override (leave empty to use global default)
-# proxmox_node: pve2
+proxmox_node: $PROXMOX_NODE
 
 # Custom environment variables (add as needed)
 custom_env_vars: {}
@@ -399,8 +565,14 @@ sed -i '' "s/{{ service_hostname }}/$SERVICE_HOSTNAME/g" "$DEPLOYMENT_DIR/group_
 sed -i '' "s/{{ dns_server | default('192.168.1.11') }}/$DEFAULT_DNS_SERVER/g" "$DEPLOYMENT_DIR/group_vars/all.yml"
 sed -i '' "s/{{ dns_domain | default('proxmox.local') }}/$DEFAULT_DNS_DOMAIN/g" "$DEPLOYMENT_DIR/group_vars/all.yml"
 
-# Remove the proxmox_node_override conditional block since it's commented out by default
-sed -i '' '/{% if proxmox_node_override %}/,/{% endif %}/d' "$DEPLOYMENT_DIR/group_vars/all.yml"
+# Handle proxmox_node configuration
+if [[ -n "$PROXMOX_NODE" ]]; then
+    # Replace the proxmox_node in the template if it exists
+    sed -i '' "s/proxmox_node: .*/proxmox_node: $PROXMOX_NODE/" "$DEPLOYMENT_DIR/group_vars/all.yml"
+else
+    # Remove the proxmox_node_override conditional block since it's commented out by default
+    sed -i '' '/{% if proxmox_node_override %}/,/{% endif %}/d' "$DEPLOYMENT_DIR/group_vars/all.yml"
+fi
 
 # Remove template-specific syntax that doesn't apply
 sed -i '' '/{% if custom_env_vars %}/,/{% endif %}/d' "$DEPLOYMENT_DIR/group_vars/all.yml"
@@ -459,6 +631,7 @@ cat > "$DEPLOYMENT_DIR/env.service" << EOF
 # Source this file along with global configuration
 
 export SERVICE_NAME="$SERVICE_NAME"
+export PROXMOX_NODE="$PROXMOX_NODE"
 export VM_ID="$VM_ID"
 export APP_PORT="$APP_PORT"
 export APP_SUBDOMAIN="$APP_SUBDOMAIN"

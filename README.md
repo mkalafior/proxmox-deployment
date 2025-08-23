@@ -108,9 +108,11 @@ pxdcli help
 From the root of your real project (no templates copied):
 
 ```bash
-# 1) Generate a service
-pxdcli generate api-service --type nodejs --runtime bun --vm-id 201 --port 3001
-pxdcli generate postgres-db --type database --runtime postgresql --vm-id 204 --port 5432 \
+# 1) Generate a service (interactive with auto VM ID selection)
+pxdcli generate api-service --type nodejs --runtime bun --port 3001
+
+# Or specify node and VM ID manually
+pxdcli generate postgres-db --type database --runtime postgresql --node pve2 --vm-id 204 --port 5432 \
   --db-name myapp --db-user myuser --db-pass secret123
 
 # 2) Update generated deployments after template changes
@@ -129,26 +131,21 @@ Advanced:
 ### 1. Generate a New Service
 
 ```bash
-# Node.js/Bun.js API
-./deployment-templates/generators/generate-multi-service.sh \
-  api-service --type nodejs --runtime bun --vm-id 201 --port 3001
+# Interactive generation (recommended - auto-selects node and VM ID)
+./manage-services.sh generate api-service
 
-# Python FastAPI
+# Direct command with auto VM ID selection
 ./deployment-templates/generators/generate-multi-service.sh \
-  python-api --type python --vm-id 202 --port 8000
+  api-service --type nodejs --runtime bun --port 3001
 
-# Go microservice
+# Specify node manually (auto VM ID selection)
 ./deployment-templates/generators/generate-multi-service.sh \
-  go-service --type golang --vm-id 203 --port 8080
+  python-api --type python --port 8000 --node pve2
 
-# PostgreSQL database
+# Full manual control
 ./deployment-templates/generators/generate-multi-service.sh \
   postgres-db --type database --runtime postgresql \
-  --vm-id 204 --port 5432 --db-name myapp --db-user myuser --db-pass secret123
-
-# Static website
-./deployment-templates/generators/generate-multi-service.sh \
-  frontend --type static --vm-id 205 --port 80
+  --node pve1 --vm-id 204 --port 5432 --db-name myapp --db-user myuser --db-pass secret123
 ```
 
 ### 2. Deploy Services
@@ -162,6 +159,40 @@ Advanced:
 
 # Or deploy from service directory
 cd deployments/python-api && ./deploy.sh
+```
+
+## ✨ New Features
+
+### 🔍 Intelligent Node & VM ID Selection
+
+The CLI now provides intelligent automation for node and VM ID selection:
+
+**Interactive 3-Step Process:**
+```bash
+./manage-services.sh generate my-service
+
+# Step 1: Shows available Proxmox nodes, asks for selection
+# Step 2: Auto-finds first available VM ID on selected node
+# Step 3: Prompts for service configuration (port, type, etc.)
+```
+
+**Command Line Options:**
+- `--node NODE` - Specify target Proxmox node (optional)
+- `--vm-id ID` - Specify VM ID (optional, auto-selected if omitted)
+- `--port PORT` - Application port (required)
+
+**Examples:**
+```bash
+# Interactive with auto-selection (recommended)
+./manage-services.sh generate api-service
+
+# Auto VM ID on specific node
+./deployment-templates/generators/generate-multi-service.sh \
+  api-service --type nodejs --port 3001 --node pve2
+
+# Full manual control
+./deployment-templates/generators/generate-multi-service.sh \
+  api-service --type nodejs --port 3001 --node pve2 --vm-id 150
 ```
 
 ### 3. Manage Services
@@ -316,7 +347,11 @@ Use the root-level script:
 ### 1. Create Service
 ```bash
 ./manage-services.sh generate my-new-service
-# Interactive prompts for VM ID, port, type, etc.
+
+# Interactive 3-step process:
+# Step 1: Node Selection - Shows available Proxmox nodes, asks for selection
+# Step 2: VM ID Assignment - Auto-finds first available VM ID on selected node
+# Step 3: Service Configuration - Prompts for port, subdomain, service type, etc.
 ```
 
 ### 2. Develop
@@ -340,37 +375,43 @@ cd services/my-new-service
 ## 🎯 Real-World Example: E-commerce Microservices
 
 ```bash
-# API Gateway (Node.js)
-./deployment-templates/generators/generate-multi-service.sh \
-  api-gateway --type nodejs --runtime bun --vm-id 201 --port 3000
+# Interactive generation (recommended - auto-selects nodes and VM IDs)
+./manage-services.sh generate api-gateway
+./manage-services.sh generate user-service
+./manage-services.sh generate order-service
+./manage-services.sh generate main-db
+./manage-services.sh generate redis-cache
+./manage-services.sh generate web-frontend
 
-# User Service (Python)
+# Or use direct commands with auto-selection
 ./deployment-templates/generators/generate-multi-service.sh \
-  user-service --type python --vm-id 202 --port 8001
+  api-gateway --type nodejs --runtime bun --port 3000 --node pve1
 
-# Order Service (Go)
-./deployment-templates/generators/generate-multi-service.sh \
-  order-service --type golang --vm-id 203 --port 8002
-
-# Main Database (PostgreSQL)
 ./deployment-templates/generators/generate-multi-service.sh \
   main-db --type database --runtime postgresql \
-  --vm-id 204 --port 5432 --db-name ecommerce
-
-# Cache (Redis)
-./deployment-templates/generators/generate-multi-service.sh \
-  redis-cache --type database --runtime redis \
-  --vm-id 205 --port 6379
-
-# Frontend (Static)
-./deployment-templates/generators/generate-multi-service.sh \
-  web-frontend --type static --vm-id 206 --port 80
+  --port 5432 --db-name ecommerce --node pve2
 
 # Deploy all services
 ./manage-services.sh deploy
 ```
 
 ## 🔍 Troubleshooting
+
+### Interactive Generation Issues
+
+If you encounter issues with the interactive generation flow:
+
+```bash
+# Check if Proxmox API credentials are configured
+echo $PROXMOX_HOST $TOKEN_ID $TOKEN_SECRET
+
+# Test API connectivity
+curl -ks -H "Authorization: PVEAPIToken=${TOKEN_ID}=${TOKEN_SECRET}" \
+  "https://${PROXMOX_HOST}:8006/api2/json/nodes"
+
+# If API fails, the CLI will use fallback defaults
+# You can still specify --node and --vm-id manually
+```
 
 ### Check Service Status
 ```bash

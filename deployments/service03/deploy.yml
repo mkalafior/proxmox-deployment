@@ -1,6 +1,6 @@
 ---
-# Deployment playbook for service01 service
-- name: Deploy service01 to Proxmox VE
+# Deployment playbook for service03 service
+- name: Deploy service03 to Proxmox VE
   hosts: localhost
   connection: local
   gather_facts: true
@@ -25,7 +25,7 @@
     - name: Debug environment variables
       debug:
         msg: |
-          Environment Debug for service01:
+          Environment Debug for service03:
           - PROXMOX_HOST: {{ lookup('env', 'PROXMOX_HOST') | default('not set') }}
           - PROXMOX_USER: {{ lookup('env', 'PROXMOX_USER') | default('not set') }}
           - PROXMOX_PASSWORD: {{ 'SET' if lookup('env', 'PROXMOX_PASSWORD') != '' else 'not set' }}
@@ -33,7 +33,7 @@
           - TOKEN_SECRET: {{ 'SET' if lookup('env', 'TOKEN_SECRET') != '' else 'not set' }}
           
           Service Configuration:
-          - Service Name: service01
+          - Service Name: service03
           - VM ID: {{ vm_id }}
           - VM Name: {{ vm_name }}
           - App Port: {{ app_port }}
@@ -224,7 +224,7 @@
     - name: Debug container info
       debug:
         msg: |
-          Container created successfully for service01!
+          Container created successfully for service03!
           VMID: {{ vm_id }}
           Name: {{ vm_name }}
           Node: {{ proxmox_node }}
@@ -258,7 +258,7 @@
       delegate_to: localhost
       when: container_ip is defined
 
-- name: Configure container and deploy service01 application
+- name: Configure container and deploy service03 application
   hosts: proxmox_containers
   become: true
   vars_files:
@@ -419,19 +419,19 @@
                 --exclude='deployments' \
                 --exclude='*.log' \
                 --exclude='.env' \
-                -czf /tmp/service01-app.tar.gz .
+                -czf /tmp/service03-app.tar.gz .
           delegate_to: localhost
           become: false
 
         - name: Copy tar archive to container
           copy:
-            src: "/tmp/service01-app.tar.gz"
-            dest: "/tmp/service01-app.tar.gz"
+            src: "/tmp/service03-app.tar.gz"
+            dest: "/tmp/service03-app.tar.gz"
             mode: '0644'
 
         - name: Extract application files
           unarchive:
-            src: "/tmp/service01-app.tar.gz"
+            src: "/tmp/service03-app.tar.gz"
             dest: "{{ app_dir }}"
             remote_src: yes
             owner: "{{ app_user }}"
@@ -439,12 +439,12 @@
 
         - name: Clean up tar files on remote container
           file:
-            path: "/tmp/service01-app.tar.gz"
+            path: "/tmp/service03-app.tar.gz"
             state: absent
 
         - name: Clean up tar files on local machine
           file:
-            path: "/tmp/service01-app.tar.gz"
+            path: "/tmp/service03-app.tar.gz"
             state: absent
           delegate_to: localhost
           become: false
@@ -541,7 +541,7 @@
     - name: Display DNS test result
       debug:
         msg: |
-          DNS Test Result for service01:
+          DNS Test Result for service03:
           rc: {{ dns_test_result.rc | default('n/a') }}
           stdout: {{ dns_test_result.stdout | default('') }}
           stderr: {{ dns_test_result.stderr | default('') }}
@@ -572,7 +572,7 @@
     - name: Display DNS resolution result
       debug:
         msg: |
-          DNS Resolution Test for service01:
+          DNS Resolution Test for service03:
           rc: {{ dns_resolution_test.rc | default('n/a') }}
           stdout: {{ dns_resolution_test.stdout | default('') }}
           stderr: {{ dns_resolution_test.stderr | default('') }}
@@ -657,7 +657,7 @@
     - name: Display service status
       debug:
         msg: |
-          service01 Service Status: {{ service_status.status.ActiveState }}
+          service03 Service Status: {{ service_status.status.ActiveState }}
           Service is {{ 'running' if service_status.status.ActiveState == 'active' else 'not running' }}
       when: service_type != 'database'
 
@@ -673,7 +673,7 @@
     - name: Display health check result
       debug:
         msg: |
-          service01 Health check status: {{ health_check.status | default('unknown') }}
+          service03 Health check status: {{ health_check.status | default('unknown') }}
           Endpoint: http://{{ ansible_host }}:{{ app_port }}/health
       when: service_type != 'database'
 

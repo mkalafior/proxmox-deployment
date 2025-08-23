@@ -1,6 +1,6 @@
 ---
-# Cleanup playbook for service01 service
-- name: Cleanup service01 from Proxmox VE
+# Cleanup playbook for service04 service
+- name: Cleanup service04 from Proxmox VE
   hosts: localhost
   connection: local
   gather_facts: true
@@ -57,6 +57,6 @@
 
     - name: Print cleanup summary
       debug:
-        msg: "Cleanup attempted for VM {{ vm_id }} on node {{ proxmox_node }} (service service01)"
+        msg: "Cleanup attempted for VM {{ vm_id }} on node {{ proxmox_node }} (service service04)"
 
 

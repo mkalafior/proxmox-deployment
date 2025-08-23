@@ -1,5 +1,5 @@
 ---
-# Service-specific variables for service01
+# Service-specific variables for service04
 # Generated from template - do not edit directly
 
 # Import global defaults
@@ -15,8 +15,8 @@ proxmox_token_id: "{{ lookup('env', 'TOKEN_ID') | default('') }}"
 proxmox_token_secret: "{{ lookup('env', 'TOKEN_SECRET') | default('') }}"
 
 # Service-specific configuration
-service_name: service01
-vm_name: service01
+service_name: service04
+vm_name: service04
 vm_id: 100
 vm_cores: 2
 vm_memory: 2048  # MB
@@ -30,33 +30,33 @@ vm_swap: 512  # MB
 vm_unprivileged: true
 
 # Application Configuration
-app_name: service01
+app_name: service04
 app_user: appuser
-app_dir: /opt/service01
-app_service_name: service01
-app_port: 3440
+app_dir: /opt/service04
+app_service_name: service04
+app_port: 3009
 
 # Service type
 service_type: nodejs
 
 # Local source code path
-local_app_path: "../../services/service01"
+local_app_path: "../../services/service04"
 
 # Production Environment Variables (apps can ignore if not needed)
 production_env:
   NODE_ENV: production
-  PORT: "3440"
+  PORT: "3009"
   HOST: "0.0.0.0"
 
 # Security Configuration
 ssh_public_key_path: "{{ ansible_env.HOME }}/.ssh/id_proxmox.pub"
 allowed_ports:
   - "22"    # SSH
-  - "3440"  # Application/db port
+  - "3009"  # Application/db port
   - "80"    # HTTP (for future use)
   - "443"   # HTTPS (for future use)
 
 # DNS Configuration for service hostname resolution
 dns_server: "192.168.1.11"  # CT101 IP address
 dns_domain: "proxmox.local"
-service_hostname: "service01"
+service_hostname: "service04"
