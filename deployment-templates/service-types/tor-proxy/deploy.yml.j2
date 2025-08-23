@@ -335,6 +335,12 @@
         state: present
         system: yes
 
+    - name: Add privoxy user to privoxy group
+      user:
+        name: privoxy
+        groups: privoxy
+        append: yes
+
     - name: Ensure Tor directories exist
       file:
         path: "{{ item }}"
