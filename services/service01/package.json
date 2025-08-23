@@ -1,11 +1,11 @@
 {
-    "name": "service01",
-    "version": "1.0.0",
-    "description": "Generated service: service01",
-    "main": "index.js",
-    "scripts": {
-        "start": "bun run index.js",
-        "dev": "bun run --watch index.js"
-    },
-    "dependencies": {}
+  "name": "service01",
+  "version": "1.0.0",
+  "description": "nodejs service: service01",
+  "main": "index.js",
+  "scripts": {
+    "start": "bun run index.js",
+    "dev": "bun run --watch index.js"
+  },
+  "dependencies": {}
 }

@@ -100,17 +100,156 @@
       failed_when: false
       changed_when: "start_result.status == 200"
     
-    - name: Wait for container to be fully started
+    # Progressive backoff attempts for slow PVE clusters (20, 30, 30, 60, 60)
+    - name: Backoff attempt 1 - wait 20s
       pause:
-        seconds: 5
+        seconds: 20
+      when: (container_ip | default('')) == ''
 
-    - name: Wait for container to get IP address
+    - name: Query interfaces after attempt 1
+      uri:
+        url: "https://{{ proxmox_host }}:8006/api2/json/nodes/{{ proxmox_node }}/lxc/{{ vm_id }}/interfaces"
+        method: GET
+        headers:
+          Authorization: "PVEAPIToken={{ proxmox_token_id }}={{ proxmox_token_secret }}"
+        validate_certs: "{{ proxmox_api_validate_certs }}"
+        return_content: yes
+        status_code: [200, 401, 403, 500]
+      register: container_interfaces_result
+      failed_when: false
+      when: (container_ip | default('')) == ''
+
+    - name: Set container IP after attempt 1
+      set_fact:
+        container_ip: "{{ (eth0_interface.inet | default('')) | regex_replace('/.*$', '') }}"
+      vars:
+        eth0_interface: "{{ container_interfaces_result.json.data | selectattr('name', 'equalto', 'eth0') | first }}"
+      when:
+        - (container_ip | default('')) == ''
+        - container_interfaces_result is defined
+        - container_interfaces_result.json is defined
+        - container_interfaces_result.json.data is defined
+        - (container_interfaces_result.json.data | selectattr('name','equalto','eth0') | list | length) > 0
+
+    - name: Backoff attempt 2 - wait 30s
       pause:
-        seconds: 10
-        
-    - name: Wait for container to get DHCP IP assignment
+        seconds: 30
+      when: (container_ip | default('')) == ''
+
+    - name: Query interfaces after attempt 2
+      uri:
+        url: "https://{{ proxmox_host }}:8006/api2/json/nodes/{{ proxmox_node }}/lxc/{{ vm_id }}/interfaces"
+        method: GET
+        headers:
+          Authorization: "PVEAPIToken={{ proxmox_token_id }}={{ proxmox_token_secret }}"
+        validate_certs: "{{ proxmox_api_validate_certs }}"
+        return_content: yes
+        status_code: [200, 401, 403, 500]
+      register: container_interfaces_result
+      failed_when: false
+      when: (container_ip | default('')) == ''
+
+    - name: Set container IP after attempt 2
+      set_fact:
+        container_ip: "{{ (eth0_interface.inet | default('')) | regex_replace('/.*$', '') }}"
+      vars:
+        eth0_interface: "{{ container_interfaces_result.json.data | selectattr('name', 'equalto', 'eth0') | first }}"
+      when:
+        - (container_ip | default('')) == ''
+        - container_interfaces_result is defined
+        - container_interfaces_result.json is defined
+        - container_interfaces_result.json.data is defined
+        - (container_interfaces_result.json.data | selectattr('name','equalto','eth0') | list | length) > 0
+
+    - name: Backoff attempt 3 - wait 30s
       pause:
-        seconds: 15
+        seconds: 30
+      when: (container_ip | default('')) == ''
+
+    - name: Query interfaces after attempt 3
+      uri:
+        url: "https://{{ proxmox_host }}:8006/api2/json/nodes/{{ proxmox_node }}/lxc/{{ vm_id }}/interfaces"
+        method: GET
+        headers:
+          Authorization: "PVEAPIToken={{ proxmox_token_id }}={{ proxmox_token_secret }}"
+        validate_certs: "{{ proxmox_api_validate_certs }}"
+        return_content: yes
+        status_code: [200, 401, 403, 500]
+      register: container_interfaces_result
+      failed_when: false
+      when: (container_ip | default('')) == ''
+
+    - name: Set container IP after attempt 3
+      set_fact:
+        container_ip: "{{ (eth0_interface.inet | default('')) | regex_replace('/.*$', '') }}"
+      vars:
+        eth0_interface: "{{ container_interfaces_result.json.data | selectattr('name', 'equalto', 'eth0') | first }}"
+      when:
+        - (container_ip | default('')) == ''
+        - container_interfaces_result is defined
+        - container_interfaces_result.json is defined
+        - container_interfaces_result.json.data is defined
+        - (container_interfaces_result.json.data | selectattr('name','equalto','eth0') | list | length) > 0
+
+    - name: Backoff attempt 4 - wait 60s
+      pause:
+        seconds: 60
+      when: (container_ip | default('')) == ''
+
+    - name: Query interfaces after attempt 4
+      uri:
+        url: "https://{{ proxmox_host }}:8006/api2/json/nodes/{{ proxmox_node }}/lxc/{{ vm_id }}/interfaces"
+        method: GET
+        headers:
+          Authorization: "PVEAPIToken={{ proxmox_token_id }}={{ proxmox_token_secret }}"
+        validate_certs: "{{ proxmox_api_validate_certs }}"
+        return_content: yes
+        status_code: [200, 401, 403, 500]
+      register: container_interfaces_result
+      failed_when: false
+      when: (container_ip | default('')) == ''
+
+    - name: Set container IP after attempt 4
+      set_fact:
+        container_ip: "{{ (eth0_interface.inet | default('')) | regex_replace('/.*$', '') }}"
+      vars:
+        eth0_interface: "{{ container_interfaces_result.json.data | selectattr('name', 'equalto', 'eth0') | first }}"
+      when:
+        - (container_ip | default('')) == ''
+        - container_interfaces_result is defined
+        - container_interfaces_result.json is defined
+        - container_interfaces_result.json.data is defined
+        - (container_interfaces_result.json.data | selectattr('name','equalto','eth0') | list | length) > 0
+
+    - name: Backoff attempt 5 - wait 60s
+      pause:
+        seconds: 60
+      when: (container_ip | default('')) == ''
+
+    - name: Query interfaces after attempt 5
+      uri:
+        url: "https://{{ proxmox_host }}:8006/api2/json/nodes/{{ proxmox_node }}/lxc/{{ vm_id }}/interfaces"
+        method: GET
+        headers:
+          Authorization: "PVEAPIToken={{ proxmox_token_id }}={{ proxmox_token_secret }}"
+        validate_certs: "{{ proxmox_api_validate_certs }}"
+        return_content: yes
+        status_code: [200, 401, 403, 500]
+      register: container_interfaces_result
+      failed_when: false
+      when: (container_ip | default('')) == ''
+
+    - name: Set container IP after attempt 5
+      set_fact:
+        container_ip: "{{ (eth0_interface.inet | default('')) | regex_replace('/.*$', '') }}"
+      vars:
+        eth0_interface: "{{ container_interfaces_result.json.data | selectattr('name', 'equalto', 'eth0') | first }}"
+      when:
+        - (container_ip | default('')) == ''
+        - container_interfaces_result is defined
+        - container_interfaces_result.json is defined
+        - container_interfaces_result.json.data is defined
+        - (container_interfaces_result.json.data | selectattr('name','equalto','eth0') | list | length) > 0
 
     - name: Verify container is running before IP discovery
       uri:
@@ -134,22 +273,7 @@
           - VMID: {{ container_status_result.json.data.vmid | default('unknown') }}
       when: container_status_result is defined
 
-    - name: Get container network interfaces via Proxmox API (retry until inet appears)
-      uri:
-        url: "https://{{ proxmox_host }}:8006/api2/json/nodes/{{ proxmox_node }}/lxc/{{ vm_id }}/interfaces"
-        method: GET
-        headers:
-          Authorization: "PVEAPIToken={{ proxmox_token_id }}={{ proxmox_token_secret }}"
-        validate_certs: "{{ proxmox_api_validate_certs }}"
-        timeout: 30
-        return_content: yes
-        status_code: [200, 401, 403, 500]
-      register: container_interfaces_result
-      failed_when: false
-      retries: 10
-      delay: 3
-      until: "container_interfaces_result.json is defined and (container_interfaces_result.json.data | selectattr('name','equalto','eth0') | map(attribute='inet') | list | length) > 0"
-      when: proxmox_token_id != '' and proxmox_token_secret != ''
+    # Old retry removed in favor of progressive backoff above
 
     - name: Debug interfaces API response
       debug:
@@ -171,10 +295,13 @@
 
     - name: Fallback - get container IP via pct exec
       shell: |
-        /usr/sbin/pct exec {{ vm_id }} -- sh -lc "ip -o -4 addr show dev eth0 | awk '{print \\ $4}' | head -n1"
+        /usr/sbin/pct exec {{ vm_id }} -- sh -lc "ip -o -4 addr show dev eth0 | awk '{print \\\\$4}' | head -n1"
       register: pct_ip_result
       changed_when: false
       ignore_errors: true
+      delegate_to: "{{ proxmox_host }}"
+      environment:
+        PATH: "/usr/sbin:/usr/bin:/bin:/sbin"
       when: container_ip is not defined or (container_ip | default('')) == ''
 
     - name: Use pct exec result if available

@@ -406,21 +406,23 @@ sed -i '' '/{% if proxmox_node_override %}/,/{% endif %}/d' "$DEPLOYMENT_DIR/gro
 sed -i '' '/{% if custom_env_vars %}/,/{% endif %}/d' "$DEPLOYMENT_DIR/group_vars/all.yml"
 sed -i '' '/{% if additional_ports %}/,/{% endif %}/d' "$DEPLOYMENT_DIR/group_vars/all.yml"
 
-# Inject database variables for database services
+# Ensure helper to write key/values in group vars
+ensure_kv() {
+    local key="$1"; shift
+    local value="$1"; shift
+    if grep -q "^${key}:" "$DEPLOYMENT_DIR/group_vars/all.yml"; then
+        sed -i '' "s|^${key}:.*|${key}: ${value}|" "$DEPLOYMENT_DIR/group_vars/all.yml"
+    else
+        printf "%s: %s\n" "${key}" "${value}" >> "$DEPLOYMENT_DIR/group_vars/all.yml"
+    fi
+}
+
+# Inject variables per service type
 if [[ "$SERVICE_TYPE_CFG" == "database" ]]; then
     DB_NAME_VAL=$(grep -E '^db_name:' "$DEPLOYMENT_DIR/service-config.yml" | awk -F: '{print $2}' | xargs || echo "$SERVICE_NAME")
     DB_USER_VAL=$(grep -E '^db_user:' "$DEPLOYMENT_DIR/service-config.yml" | awk -F: '{print $2}' | xargs || echo "$SERVICE_NAME")
     DB_PASS_VAL=$(grep -E '^db_password:' "$DEPLOYMENT_DIR/service-config.yml" | cut -d: -f2- | xargs || true)
     RUNTIME_VAL=$(grep -E '^(runtime_variant|db_type):' "$DEPLOYMENT_DIR/service-config.yml" | head -n1 | awk -F: '{print $2}' | xargs || echo "postgresql")
-    ensure_kv() {
-        local key="$1"; shift
-        local value="$1"; shift
-        if grep -q "^${key}:" "$DEPLOYMENT_DIR/group_vars/all.yml"; then
-            sed -i '' "s|^${key}:.*|${key}: ${value}|" "$DEPLOYMENT_DIR/group_vars/all.yml"
-        else
-            printf "%s: %s\n" "${key}" "${value}" >> "$DEPLOYMENT_DIR/group_vars/all.yml"
-        fi
-    }
     ensure_kv "service_type" "database"
     ensure_kv "runtime_variant" "${RUNTIME_VAL}"
     ensure_kv "db_type" "${RUNTIME_VAL}"
@@ -431,6 +433,12 @@ if [[ "$SERVICE_TYPE_CFG" == "database" ]]; then
     else
         printf "db_password: \"%s\"\n" "${DB_PASS_VAL}" >> "$DEPLOYMENT_DIR/group_vars/all.yml"
     fi
+else
+    # Non-database: write concrete service_type, default to nodejs if unset
+    if [[ -z "$SERVICE_TYPE_CFG" ]]; then
+        SERVICE_TYPE_CFG="nodejs"
+    fi
+    ensure_kv "service_type" "$SERVICE_TYPE_CFG"
 fi
 
 log_info "✅ Generated Ansible configuration"
@@ -811,89 +819,41 @@ EOF
 
 chmod +x "$DEPLOYMENT_DIR/manage.sh"
 
-# Create cleanup script
+# Create cleanup playbook and wrapper script
+cp "$TEMPLATE_DIR/cleanup.yml.j2" "$DEPLOYMENT_DIR/cleanup.yml"
+sed -i '' "s/{{ service_name }}/$SERVICE_NAME/g" "$DEPLOYMENT_DIR/cleanup.yml"
+
 cat > "$DEPLOYMENT_DIR/cleanup.sh" << 'EOF'
 #!/bin/bash
-
-# Service cleanup script
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SERVICE_NAME="$(basename "$SCRIPT_DIR")"
 
-# Colors for output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
 NC='\033[0m'
-
-log_info() { echo -e "${GREEN}[INFO]${NC} $1"; }
-log_warn() { echo -e "${YELLOW}[WARN]${NC} $1"; }
-log_error() { echo -e "${RED}[ERROR]${NC} $1"; }
+info() { echo -e "${GREEN}[INFO]${NC} $1"; }
+err() { echo -e "${RED}[ERROR]${NC} $1"; }
 
 echo "🧹 Cleanup $SERVICE_NAME Deployment"
 echo "===================================="
 
-# Load configurations
-if [[ -f "../../global-config/env.proxmox.global" ]]; then
-    source ../../global-config/env.proxmox.global
+if [[ -f "$HOME/.pxdcli/env.global" ]]; then
+  source "$HOME/.pxdcli/env.global"
+fi
+if [[ -f ./env.service ]]; then
+  source ./env.service
 fi
 
-if [[ -f "env.service" ]]; then
-    source env.service
+if [[ ! -f ./group_vars/all.yml ]]; then
+  err "group_vars/all.yml missing"
+  exit 1
 fi
 
-if [[ ! -f "vm_ip.txt" ]]; then
-    log_warn "No deployment found for $SERVICE_NAME"
-    exit 0
-fi
-
-VM_IP=$(cat vm_ip.txt | tr -d '[:space:]')
-
-echo "⚠️  This will permanently delete:"
-echo "   • VM/Container with ID: ${VM_ID}"
-echo "   • All data in the container"
-echo "   • Service configuration"
-echo ""
-read -p "Are you sure you want to continue? (type 'yes' to confirm): " -r
-
-if [[ "$REPLY" != "yes" ]]; then
-    log_info "Cleanup cancelled"
-    exit 0
-fi
-
-log_info "Stopping container..."
-
-# Stop container
-STOP_RESPONSE=$(curl -k -s -X POST \
-  -H "Authorization: PVEAPIToken=${TOKEN_ID}=${TOKEN_SECRET}" \
-  "https://${PROXMOX_HOST}:8006/api2/json/nodes/${PROXMOX_NODE}/lxc/${VM_ID}/status/stop" 2>/dev/null || echo '{"errors":["Failed to stop"]}')
-
-if echo "$STOP_RESPONSE" | grep -q '"data"'; then
-    log_info "Container stopped successfully"
-else
-    log_warn "Container may already be stopped"
-fi
-
-sleep 5
-
-log_info "Removing container..."
-
-# Remove container
-DELETE_RESPONSE=$(curl -k -s -X DELETE \
-  -H "Authorization: PVEAPIToken=${TOKEN_ID}=${TOKEN_SECRET}" \
-  "https://${PROXMOX_HOST}:8006/api2/json/nodes/${PROXMOX_NODE}/lxc/${VM_ID}" 2>/dev/null || echo '{"errors":["Failed to delete"]}')
-
-if echo "$DELETE_RESPONSE" | grep -q '"data"'; then
-    log_info "Container removed successfully"
-else
-    log_error "Failed to remove container - it may not exist"
-fi
-
-# Clean up local files
-rm -f vm_ip.txt
-
-log_info "✅ $SERVICE_NAME cleanup completed"
+ANSIBLE_CONFIG=${ANSIBLE_CONFIG:-./ansible.cfg}
+ANSIBLE_STDOUT_CALLBACK=unixy ansible-playbook cleanup.yml -e @group_vars/all.yml
+info "Cleanup playbook completed"
 EOF
 
 chmod +x "$DEPLOYMENT_DIR/cleanup.sh"

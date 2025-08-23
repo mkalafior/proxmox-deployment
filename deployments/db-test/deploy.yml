@@ -1,6 +1,6 @@
 ---
-# Deployment playbook for {{ service_name }} database service
-- name: Deploy {{ service_name }} to Proxmox VE
+# Deployment playbook for db-test database service
+- name: Deploy db-test to Proxmox VE
   hosts: localhost
   connection: local
   gather_facts: true
@@ -266,7 +266,7 @@
       systemd:
         daemon_reload: yes
 
-- name: Configure container and deploy {{ service_name }} database
+- name: Configure container and deploy db-test database
   hosts: proxmox_containers
   become: true
   vars_files:

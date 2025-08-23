@@ -10,6 +10,7 @@ if [[ ! -d "$TARGET_DIR/.git" ]]; then
   git clone --depth 1 "$(cd "$(dirname "$0")/.." && pwd)" "$TARGET_DIR"
 else
   echo "Templates already installed at $TARGET_DIR"
+  git -C "$TARGET_DIR" pull
 fi
 
 SRC_CLI="$(cd "$(dirname "$0")" && pwd)/proxmox-deploy"

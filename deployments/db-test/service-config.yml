@@ -1,0 +1,44 @@
+# Service configuration for db-test
+# Generated on Fri Aug 22 18:54:05 CEST 2025
+
+service_name: db-test
+service_type: database
+runtime_variant: postgresql
+vm_name: db-test
+vm_id: 550
+vm_cores: 2
+vm_memory: 2048
+vm_disk_size: 20
+vm_storage: local-lvm
+vm_network_bridge: vmbr0
+vm_swap: 512
+vm_unprivileged: true
+
+app_name: db-test
+app_user: appuser
+app_dir: /opt/db-test
+app_service_name: db-test
+app_port: 5432
+app_main_file: 
+local_app_path: "../../services/db-test"
+
+service_hostname: db-test
+app_subdomain: 
+
+dns_server: 192.168.1.11
+dns_domain: proxmox.local
+
+# Proxmox node override (leave empty to use global default)
+# proxmox_node: pve2
+
+# Service type specific configuration
+db_type: postgresql
+db_name: dbtest
+db_user: dbuser
+db_password: ov9qBtpl+UMZYfGbLrqUeI8Y6a8T56Ty74QtrDVi4Mw=
+
+# Custom environment variables
+custom_env_vars: {}
+
+# Additional ports to open in firewall
+additional_ports: []

@@ -1,0 +1,62 @@
+---
+# Cleanup playbook for {{ service_name }} service
+- name: Cleanup {{ service_name }} from Proxmox VE
+  hosts: localhost
+  connection: local
+  gather_facts: true
+  vars_files:
+    - group_vars/all.yml
+
+  tasks:
+    - name: Validate environment variables
+      assert:
+        that:
+          - proxmox_host is defined and proxmox_host != ""
+          - >
+            (proxmox_token_id is defined and proxmox_token_id != "" and 
+             proxmox_token_secret is defined and proxmox_token_secret != "") or
+            (proxmox_user is defined and proxmox_user != "" and 
+             proxmox_password is defined and proxmox_password != "")
+        fail_msg: |
+          Required Proxmox authentication must be configured.
+
+    - name: Try to stop the container (idempotent)
+      uri:
+        url: "https://{{ proxmox_host }}:8006/api2/json/nodes/{{ proxmox_node }}/lxc/{{ vm_id }}/status/stop"
+        method: POST
+        headers:
+          Authorization: "PVEAPIToken={{ proxmox_token_id }}={{ proxmox_token_secret }}"
+        validate_certs: "{{ proxmox_api_validate_certs }}"
+        status_code: [200, 500]
+        timeout: 60
+      register: stop_result
+      failed_when: false
+      changed_when: "stop_result.status == 200"
+
+    - name: Pause briefly before deletion
+      pause:
+        seconds: 5
+
+    - name: Delete the container (idempotent)
+      uri:
+        url: "https://{{ proxmox_host }}:8006/api2/json/nodes/{{ proxmox_node }}/lxc/{{ vm_id }}"
+        method: DELETE
+        headers:
+          Authorization: "PVEAPIToken={{ proxmox_token_id }}={{ proxmox_token_secret }}"
+        validate_certs: "{{ proxmox_api_validate_certs }}"
+        status_code: [200, 404, 500]
+        timeout: 120
+      register: delete_result
+      failed_when: false
+      changed_when: "delete_result.status == 200"
+
+    - name: Remove saved VM IP file
+      file:
+        path: "./vm_ip.txt"
+        state: absent
+
+    - name: Print cleanup summary
+      debug:
+        msg: "Cleanup attempted for VM {{ vm_id }} on node {{ proxmox_node }} (service {{ service_name }})"
+
+
