@@ -32,6 +32,7 @@ usage() {
   echo "  generate <service> --type <type> [opts]"
   echo "  update [services...] [--force]"
   echo "  deploy <service>"
+  echo "  list                         # List services under PROJECT_ROOT/deployments"
   echo "  restart <service>            # Restart app (or DB service) inside container"
   echo "  nodes                        # List Proxmox nodes (requires TOKEN_ID/TOKEN_SECRET)"
   echo "  help"
@@ -52,6 +53,34 @@ case "$CMD" in
     svc="${1:-}"
     if [[ -z "$svc" ]]; then echo "Missing service name"; exit 1; fi
     ( cd "$PROJECT_ROOT_OVERRIDE/deployments/$svc" && ./deploy.sh )
+    ;;
+  list)
+    root_dir="$PROJECT_ROOT_OVERRIDE/deployments"
+    if [[ ! -d "$root_dir" ]]; then
+      echo "No deployments directory found at: $root_dir"
+      exit 0
+    fi
+    echo "📋 Available Services"
+    echo "===================="
+    echo ""
+    find "$root_dir" -mindepth 1 -maxdepth 1 -type d -exec basename {} \; | sort | while read -r svc; do
+      [[ -z "$svc" ]] && continue
+      echo "🔹 $svc"
+      if [[ -f "$root_dir/$svc/env.service" ]]; then
+        # shellcheck disable=SC1090
+        source "$root_dir/$svc/env.service" 2>/dev/null || true
+        echo "   VM ID: ${VM_ID:-unknown}"
+        echo "   Port: ${APP_PORT:-unknown}"
+        echo "   Subdomain: ${APP_SUBDOMAIN:-unknown}"
+      fi
+      if [[ -f "$root_dir/$svc/vm_ip.txt" ]]; then
+        vm_ip=$(tr -d '[:space:]' < "$root_dir/$svc/vm_ip.txt")
+        echo "   Status: 🟢 Deployed (IP: $vm_ip)"
+      else
+        echo "   Status: ⚪ Not deployed"
+      fi
+      echo ""
+    done
     ;;
   nodes)
     # List Proxmox nodes using API token
