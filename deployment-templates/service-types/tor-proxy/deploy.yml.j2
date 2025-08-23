@@ -338,8 +338,7 @@
     - name: Add privoxy user to privoxy group
       user:
         name: privoxy
-        groups: privoxy
-        append: yes
+        group: privoxy
 
     - name: Ensure Tor directories exist
       file:
