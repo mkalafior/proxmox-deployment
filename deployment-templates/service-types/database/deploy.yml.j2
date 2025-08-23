@@ -68,7 +68,7 @@
           5. Verify VM ID {{ vm_id }} is not already in use
 
           Run the debug script: ./tools/proxmox-debug.sh
-      when: proxmox_vm.rc != 0 or (proxmox_vm.stdout | default('')) == '' or (proxmox_vm.stdout | from_json).data == null
+      when: proxmox_vm.rc != 0 or (proxmox_vm.stdout | default('')) == '' or ((proxmox_vm.stdout | from_json).data is not defined) or ((proxmox_vm.stdout | from_json).data is none)
 
     - name: Extract UPID from successful container creation
       set_fact:
