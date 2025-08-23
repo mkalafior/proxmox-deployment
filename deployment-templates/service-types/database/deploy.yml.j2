@@ -14,7 +14,7 @@
         method: GET
         headers:
           Authorization: "PVEAPIToken={{ proxmox_token_id }}={{ proxmox_token_secret }}"
-        validate_certs: {{ proxmox_api_validate_certs }}
+        validate_certs: "{{ proxmox_api_validate_certs }}"
         status_code: [200, 404]
         return_content: yes
       register: ct_exists_result
