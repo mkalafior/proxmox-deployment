@@ -29,6 +29,28 @@
         src: "{{ ssh_public_key_path }}"
       register: ssh_public_key_content
 
+    - name: Check if container already exists
+      shell: |
+        curl -k -X GET \
+          -H "Authorization: PVEAPIToken={{ proxmox_token_id }}={{ proxmox_token_secret }}" \
+          "https://{{ proxmox_host }}:8006/api2/json/nodes/{{ proxmox_node }}/lxc/{{ vm_id }}/status/current"
+      register: container_check
+      failed_when: false
+
+    - name: Destroy existing container if it exists
+      shell: |
+        curl -k -X DELETE \
+          -H "Authorization: PVEAPIToken={{ proxmox_token_id }}={{ proxmox_token_secret }}" \
+          "https://{{ proxmox_host }}:8006/api2/json/nodes/{{ proxmox_node }}/lxc/{{ vm_id }}"
+      register: destroy_result
+      failed_when: false
+      when: container_check.rc == 0
+
+    - name: Wait for container destruction
+      pause:
+        seconds: 5
+      when: container_check.rc == 0
+
     - name: Create Proxmox container via API
       shell: |
         curl -k -X POST \
