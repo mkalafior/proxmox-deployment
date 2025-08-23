@@ -8,6 +8,22 @@
     - group_vars/all.yml
   
   tasks:
+    - name: Check if container already exists
+      uri:
+        url: "https://{{ proxmox_host }}:8006/api2/json/nodes/{{ proxmox_node }}/lxc/{{ vm_id }}/status/current"
+        method: GET
+        headers:
+          Authorization: "PVEAPIToken={{ proxmox_token_id }}={{ proxmox_token_secret }}"
+        validate_certs: {{ proxmox_api_validate_certs }}
+        status_code: [200, 404]
+        return_content: yes
+      register: ct_exists_result
+      failed_when: false
+
+    - name: Set container existence fact
+      set_fact:
+        container_exists: "{{ ct_exists_result.status | default(0) == 200 }}"
+
     - name: Validate environment variables
       assert:
         that:
@@ -45,11 +61,13 @@
           "https://{{ proxmox_host }}:8006/api2/json/nodes/{{ proxmox_node }}/lxc"
       register: proxmox_vm
       failed_when: false
+      when: not (container_exists | default(false))
 
     - name: Debug container creation response
       debug:
         var: proxmox_vm
         verbosity: 1
+      when: not (container_exists | default(false))
 
     - name: Check if container creation was successful
       fail:
@@ -68,12 +86,17 @@
           5. Verify VM ID {{ vm_id }} is not already in use
 
           Run the debug script: ./tools/proxmox-debug.sh
-      when: proxmox_vm.rc != 0 or (proxmox_vm.stdout | default('')) == '' or ((proxmox_vm.stdout | from_json).data is not defined) or ((proxmox_vm.stdout | from_json).data is none)
+      when:
+        - not (container_exists | default(false))
+        - proxmox_vm.rc != 0 or (proxmox_vm.stdout | default('')) == '' or ((proxmox_vm.stdout | from_json).data is not defined)
 
     - name: Extract UPID from successful container creation
       set_fact:
         container_upid: "{{ (proxmox_vm.stdout | from_json).data }}"
-      when: proxmox_vm.rc == 0 and (proxmox_vm.stdout | from_json).data is defined
+      when:
+        - not (container_exists | default(false))
+        - proxmox_vm.rc == 0
+        - (proxmox_vm.stdout | from_json).data is defined
 
     - name: Start the container (idempotent)
       uri:
@@ -386,6 +409,56 @@
         timeout: 30
         state: started
       when: db_type == 'postgresql'
+
+    # DNS auto-registration (parity with base deploy template)
+    - name: Copy DNS authentication key
+      template:
+        src: bind-key.conf.j2
+        dest: /etc/bind-key.conf
+        mode: '0600'
+        owner: root
+        group: root
+
+    - name: Install netcat for DNS connectivity testing
+      apt:
+        name: netcat-openbsd
+        state: present
+
+    - name: Copy DNS registration script
+      template:
+        src: dns-register.sh.j2
+        dest: /opt/dns-register.sh
+        mode: '0755'
+        owner: root
+        group: root
+
+    - name: Test DNS registration script
+      command: /opt/dns-register.sh test
+      register: dns_test_result
+      ignore_errors: true
+
+    - name: Create DNS registration service
+      template:
+        src: dns-register.service.j2
+        dest: /etc/systemd/system/dns-register.service
+        mode: '0644'
+      notify: reload systemd
+
+    - name: Enable and start DNS registration service
+      systemd:
+        name: dns-register
+        enabled: yes
+        state: started
+        daemon_reload: yes
+
+    - name: Wait for DNS registration to complete
+      pause:
+        seconds: 3
+
+    - name: Test hostname resolution
+      shell: nslookup {{ service_hostname }}.{{ dns_domain }} {{ dns_server }}
+      register: dns_resolution_test
+      ignore_errors: true
 
     - name: Initialize PostgreSQL database
       postgresql_db:

@@ -73,6 +73,70 @@ service_ip_via_api() {
   fi
 }
 
+# Helper: get VM status via Proxmox API (running/stopped)
+service_status_via_api() {
+  local svc_dir="$1"; shift
+  local gv="$svc_dir/group_vars/all.yml"
+  local node="$(yaml_get_key "$gv" "proxmox_node")"
+  local vmid=""
+  if [[ -f "$svc_dir/env.service" ]]; then
+    # shellcheck disable=SC1090
+    source "$svc_dir/env.service" 2>/dev/null || true
+    vmid="${VM_ID:-}"
+  fi
+  if [[ -z "${PROXMOX_HOST:-}" || -z "${TOKEN_ID:-}" || -z "${TOKEN_SECRET:-}" || -z "$node" || -z "$vmid" ]]; then
+    echo ""; return 0
+  fi
+  local url="https://${PROXMOX_HOST}:8006/api2/json/nodes/${node}/lxc/${vmid}/status/current"
+  local resp
+  resp=$(curl -ks -H "Authorization: PVEAPIToken=${TOKEN_ID}=${TOKEN_SECRET}" "$url" 2>/dev/null || true)
+  if command -v jq >/dev/null 2>&1; then
+    echo "$resp" | jq -r '.data.status // empty'
+  else
+    echo "$resp" | grep -o '"status"\s*:\s*"[^"]\+"' | head -n1 | sed 's/.*:"\(.*\)"/\1/'
+  fi
+}
+
+# Helper: determine which systemd unit(s) to check for a service
+determine_units() {
+  local svc_dir="$1"; shift
+  local default_unit="$1"; shift || true
+  local config_file="$svc_dir/service-config.yml"
+  local group_vars_file="$svc_dir/group_vars/all.yml"
+  local units=""
+  local service_type="$(yaml_get_key "$config_file" "service_type")"
+  local app_service_name="$(yaml_get_key "$group_vars_file" "app_service_name")"
+  [[ -z "$app_service_name" ]] && app_service_name="$default_unit"
+
+  if [[ "$service_type" == "database" ]]; then
+    local db_type="$(yaml_get_key "$config_file" "db_type")"
+    [[ -z "$db_type" ]] && db_type="$(yaml_get_key "$config_file" "runtime_variant")"
+    case "$db_type" in
+      postgresql|postgres)
+        units="postgresql"
+        ;;
+      mysql|mariadb)
+        units="mysql"
+        ;;
+      redis)
+        units="redis-server"
+        ;;
+      mongodb|mongo)
+        units="mongod"
+        ;;
+      *)
+        units="postgresql mysql redis-server mongod"
+        ;;
+    esac
+  elif [[ "$service_type" == "tor-proxy" ]]; then
+    units="tor privoxy"
+  else
+    units="$app_service_name"
+  fi
+
+  echo "$units"
+}
+
 usage() {
   echo "pxdcli <command> [args]"
   echo "Commands:"
@@ -124,6 +188,10 @@ case "$CMD" in
         echo "   Port: ${APP_PORT:-unknown}"
         echo "   Subdomain: ${APP_SUBDOMAIN:-unknown}"
       fi
+      # Proxmox VM status
+      pve_status=$(service_status_via_api "$root_dir/$svc")
+      [[ -n "$pve_status" ]] && echo "   PVE: $pve_status"
+
       # Show DNS-based reachability
       fqdn=""
       if [[ -f "$root_dir/$svc/group_vars/all.yml" ]]; then
@@ -181,7 +249,11 @@ case "$CMD" in
         api_ip=$(service_ip_via_api "$svc_dir"); [[ -n "$api_ip" ]] && echo "  IP(API): $api_ip"
         ssh_host="$fqdn"; [[ -n "$api_ip" ]] && ssh_host="$api_ip"
         if [[ -n "$ssh_host" ]]; then
-          ssh -i "$HOME/.ssh/id_proxmox" -o StrictHostKeyChecking=no -o BatchMode=yes -o ConnectTimeout=5 root@"$ssh_host" "systemctl is-active ${svc} || true; ss -tlnp | grep :${app_port:-0} || true" 2>/dev/null | sed 's/^/  /'
+          units="$(determine_units "$svc_dir" "$svc")"
+          ssh -i "$HOME/.ssh/id_proxmox" -o StrictHostKeyChecking=no -o BatchMode=yes -o ConnectTimeout=5 root@"$ssh_host" "
+            for u in $units; do echo \"Service: \$u\"; systemctl is-active \$u || true; done; 
+            ss -tlnp | grep :${app_port:-0} || true
+          " 2>/dev/null | sed 's/^/  /'
         fi
         echo ""
       done
@@ -200,9 +272,10 @@ case "$CMD" in
       api_ip=$(service_ip_via_api "$svc_dir"); [[ -n "$api_ip" ]] && echo "IP(API): $api_ip"
       ssh_host="$fqdn"; [[ -n "$api_ip" ]] && ssh_host="$api_ip"
       if [[ -n "$ssh_host" ]]; then
+        units="$(determine_units "$svc_dir" "$target_svc")"
         ssh -i "$HOME/.ssh/id_proxmox" -o StrictHostKeyChecking=no -o BatchMode=yes -o ConnectTimeout=5 root@"$ssh_host" "
-          echo '🔍 Service:'; systemctl status ${target_svc} --no-pager -n 5 || true
-          echo ''; echo '🌐 Ports:'; ss -tlnp | grep :${app_port:-0} || true
+          echo '🔍 Service units:'; for u in $units; do echo \"- \$u\"; systemctl status \$u --no-pager -n 5 || true; echo ''; done
+          echo '🌐 Ports:'; ss -tlnp | grep :${app_port:-0} || true
         "
       fi
     fi
