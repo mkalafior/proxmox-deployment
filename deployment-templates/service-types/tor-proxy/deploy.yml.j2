@@ -383,6 +383,7 @@
           listen-address 0.0.0.0:{{ http_proxy_port }}
           forward-socks5t / 127.0.0.1:{{ socks_port }} .
           logfile /var/log/privoxy/logfile
+          pidfile /run/privoxy/privoxy.pid
           actionsfile default.action
           filterfile default.filter
           debug 1
@@ -403,6 +404,20 @@
         - /etc/privoxy/user.action
         - /etc/privoxy/user.filter
         - /etc/privoxy/regression-tests.action
+
+    - name: Remove existing privoxy pid file if it exists
+      file:
+        path: /run/privoxy.pid
+        state: absent
+      ignore_errors: true
+
+    - name: Ensure privoxy user can write to run directory
+      file:
+        path: /run/privoxy
+        state: directory
+        owner: privoxy
+        group: privoxy
+        mode: '0755'
 
     - name: Open firewall ports (22, socks, http_proxy)
       ufw:
