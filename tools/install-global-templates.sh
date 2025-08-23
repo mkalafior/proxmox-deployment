@@ -13,6 +13,13 @@ else
   git -C "$TARGET_DIR" pull
 fi
 
+# Log branch and latest commit information
+echo "=== Repository Status ==="
+echo "Branch: $(git -C "$TARGET_DIR" rev-parse --abbrev-ref HEAD)"
+echo "Latest Commit SHA: $(git -C "$TARGET_DIR" rev-parse --short HEAD)"
+echo "Latest Commit Description: $(git -C "$TARGET_DIR" log -1 --oneline)"
+echo "=========================="
+
 SRC_CLI="$(cd "$(dirname "$0")" && pwd)/proxmox-deploy"
 DEST_CLI="$BIN_DIR/pxdcli"
 chmod +x "$SRC_CLI"

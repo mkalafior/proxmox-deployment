@@ -79,41 +79,38 @@ fetch_vm_ids_from_node() {
 
 find_first_available_vmid() {
     local node="$1"
-    local used_vmids
-    local vmid=100  # Start from VMID 100
-
-    # Get all used VMIDs from the node
-    used_vmids=$(fetch_vm_ids_from_node "$node")
-
-    # Convert to array
-    local used_array=()
-    while IFS= read -r line; do
-        if [[ -n "$line" && "$line" =~ ^[0-9]+$ ]]; then
-            used_array+=("$line")
+    # Prefer cluster-wide nextid endpoint
+    if [[ -n "${PROXMOX_HOST:-}" && -n "${TOKEN_ID:-}" && -n "${TOKEN_SECRET:-}" ]]; then
+        local resp nextid
+        resp=$(curl -ks -H "Authorization: PVEAPIToken=${TOKEN_ID}=${TOKEN_SECRET}" \
+            -X POST "https://${PROXMOX_HOST}:8006/api2/json/cluster/nextid" 2>/dev/null || true)
+        if [[ "$resp" == *"\"data\":"* ]]; then
+            nextid=$(echo "$resp" | sed -n 's/.*"data"\s*:\s*"\?\([0-9]\+\)"\?.*/\1/p' | head -n1)
+            if [[ -n "$nextid" ]]; then
+                echo "$nextid"
+                return 0
+            fi
         fi
-    done <<< "$used_vmids"
+    fi
 
-    # Find first available VMID starting from 100
+    # Fallback: compute across cluster resources
+    local resources used vmid
+    resources=$(curl -ks -H "Authorization: PVEAPIToken=${TOKEN_ID}=${TOKEN_SECRET}" \
+        "https://${PROXMOX_HOST}:8006/api2/json/cluster/resources?type=vm" 2>/dev/null || true)
+    if command -v jq >/dev/null 2>&1; then
+        used=$(echo "$resources" | jq -r '.data[].vmid' 2>/dev/null | grep -E '^[0-9]+$' | sort -n | uniq)
+    else
+        used=$(echo "$resources" | grep -o '"vmid"\s*:\s*[0-9]\+' | grep -o '[0-9]\+' | sort -n | uniq)
+    fi
+    vmid=100
     while [[ $vmid -lt 10000 ]]; do
-        local found=false
-        if [[ ${#used_array[@]} -gt 0 ]]; then
-            for used in "${used_array[@]}"; do
-                if [[ "$vmid" == "$used" ]]; then
-                    found=true
-                    break
-                fi
-            done
-        fi
-
-        if [[ "$found" == "false" ]]; then
+        if ! echo "$used" | grep -qx "$vmid"; then
             echo "$vmid"
             return 0
         fi
-
         ((vmid++))
     done
-
-    log_error "No available VMID found (all IDs 100-9999 are in use)"
+    log_error "No available VMID found cluster-wide (100-9999)"
     return 1
 }
 
