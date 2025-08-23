@@ -307,16 +307,40 @@
           - privoxy
         state: present
 
+    - name: Ensure Tor directories exist
+      file:
+        path: "{{ item }}"
+        state: directory
+        owner: debian-tor
+        group: debian-tor
+        mode: '0700'
+      loop:
+        - /var/lib/tor
+        - /var/log/tor
+
+    - name: Ensure Privoxy log directory exists
+      file:
+        path: /var/log/privoxy
+        state: directory
+        owner: privoxy
+        group: privoxy
+        mode: '0755'
+
     - name: Configure torrc
       copy:
         dest: /etc/tor/torrc
         content: |
           SocksPort 0.0.0.0:{{ socks_port }}
+          SocksListenAddress 0.0.0.0
           Log notice stdout
+          DataDirectory /var/lib/tor
+          Log notice file /var/log/tor/notices.log
           NewCircuitPeriod {{ tor_new_circuit }}
           MaxCircuitDirtiness {{ tor_max_dirtiness }}
-        owner: root
-        group: root
+          ExitNodes {us},{ca},{gb},{de},{nl},{se},{no},{dk},{fi},{fr},{ch},{at},{be},{es},{it},{pt},{pl},{cz},{sk},{hu},{ro},{bg},{gr},{ee},{lv},{lt},{lu},{mt},{si},{hr},{cy},{ie},{is},{li},{mc},{sm},{va},{ad},{al},{ba},{mk},{me},{rs},{tr},{ua},{by},{md},{ru},{am},{az},{ge},{kz},{kg},{tj},{tm},{uz},{mn},{cn},{jp},{kr},{tw},{hk},{mo},{sg},{th},{my},{id},{ph},{vn},{au},{nz},{fj},{pg},{sb},{vu},{nc},{pf},{gu},{mp},{as},{ck},{nu},{nf},{nr},{tv},{ki},{mh},{fm},{pw},{ws},{to},{wf},{tk},{cc},{cx},{hm},{aq},{bv},{gs},{hm},{tf},{sj},{ax},{fo},{gg},{im},{je},{gi},{pt},{es},{pt},{es},{pt},{es}
+          StrictNodes 0
+        owner: debian-tor
+        group: debian-tor
         mode: '0644'
 
     - name: Configure privoxy
@@ -328,8 +352,10 @@
           logfile /var/log/privoxy/logfile
           actionsfile default.action
           filterfile default.filter
-        owner: root
-        group: root
+          debug 1
+          toggle 1
+        owner: privoxy
+        group: privoxy
         mode: '0644'
 
     - name: Open firewall ports (22, socks, http_proxy)
@@ -347,22 +373,51 @@
         enabled: yes
         state: started
       loop:
-        - tor
+        - tor@default
         - privoxy
+
+    - name: Restart services to apply configuration changes
+      systemd:
+        name: "{{ item }}"
+        state: restarted
+        daemon_reload: yes
+      loop:
+        - tor@default
+        - privoxy
+
+    - name: Wait for services to fully start
+      pause:
+        seconds: 5
+
+    - name: Verify Tor is listening on correct interface
+      shell: |
+        ss -tlnp | grep ":{{ socks_port }}" | grep "0.0.0.0"
+      register: tor_listen_check
+      failed_when: tor_listen_check.rc != 0
+      changed_when: false
+
+    - name: Verify Privoxy is listening on correct interface
+      shell: |
+        ss -tlnp | grep ":{{ http_proxy_port }}" | grep "0.0.0.0"
+      register: privoxy_listen_check
+      failed_when: privoxy_listen_check.rc != 0
+      changed_when: false
 
     - name: Health check - socks5 to torproject (optional)
       shell: |
-        curl -sS --socks5 127.0.0.1:{{ socks_port }} https://check.torproject.org | head -n1
+        curl -sS --socks5 127.0.0.1:{{ socks_port }} --connect-timeout 10 https://check.torproject.org | head -n1
       register: socks_check
       changed_when: false
       failed_when: false
+      when: "'curl' in ansible_facts.packages"
 
     - name: Health check - http proxy to example.com (optional)
       shell: |
-        curl -sS -x http://127.0.0.1:{{ http_proxy_port }} https://example.com | head -n1
+        curl -sS -x http://127.0.0.1:{{ http_proxy_port }} --connect-timeout 10 https://example.com | head -n1
       register: http_check
       changed_when: false
       failed_when: false
+      when: "'curl' in ansible_facts.packages"
 
     - name: Show health checks
       debug:
