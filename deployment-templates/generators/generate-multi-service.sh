@@ -379,7 +379,11 @@ fi
 # Set runtime defaults
 case "$SERVICE_TYPE" in
     nodejs)
-        RUNTIME_VARIANT="${RUNTIME_VARIANT:-bun}"
+        if [[ -z "$RUNTIME_VARIANT" ]]; then
+            echo -n "Node runtime (node/bun) [bun]: "
+            read -r RUNTIME_VARIANT
+            RUNTIME_VARIANT="${RUNTIME_VARIANT:-bun}"
+        fi
         APP_MAIN_FILE="${APP_MAIN_FILE:-index.js}"
         ;;
     python)
@@ -479,21 +483,22 @@ create_service_starter() {
     
     case "$SERVICE_TYPE" in
         nodejs)
-            cat > "$SERVICE_DIR/package.json" << EOF
+            if [[ "$RUNTIME_VARIANT" == "bun" ]]; then
+                cat > "$SERVICE_DIR/package.json" << EOF
 {
   "name": "$SERVICE_NAME",
   "version": "1.0.0",
   "description": "$SERVICE_TYPE service: $SERVICE_NAME",
   "main": "$APP_MAIN_FILE",
   "scripts": {
-    "start": "${RUNTIME_VARIANT} run $APP_MAIN_FILE",
-    "dev": "${RUNTIME_VARIANT} run --watch $APP_MAIN_FILE"
+    "start": "bun run $APP_MAIN_FILE",
+    "dev": "bun run --watch $APP_MAIN_FILE"
   },
   "dependencies": {}
 }
 EOF
 
-            cat > "$SERVICE_DIR/$APP_MAIN_FILE" << EOF
+                cat > "$SERVICE_DIR/$APP_MAIN_FILE" << EOF
 // $SERVICE_TYPE service: $SERVICE_NAME
 const server = Bun.serve({
   port: process.env.PORT || $APP_PORT,
@@ -528,8 +533,51 @@ const server = Bun.serve({
   },
 });
 
-console.log(\`🚀 $SERVICE_NAME ($SERVICE_TYPE) running on http://\${server.hostname}:\${server.port}\`);
+console.log(`🚀 $SERVICE_NAME ($SERVICE_TYPE) running on http://${server.hostname}:${server.port}`);
 EOF
+            else
+                cat > "$SERVICE_DIR/package.json" << EOF
+{
+  "name": "$SERVICE_NAME",
+  "version": "1.0.0",
+  "description": "$SERVICE_TYPE service: $SERVICE_NAME",
+  "main": "$APP_MAIN_FILE",
+  "scripts": {
+    "start": "node $APP_MAIN_FILE"
+  },
+  "dependencies": {}
+}
+EOF
+                cat > "$SERVICE_DIR/$APP_MAIN_FILE" << EOF
+// $SERVICE_TYPE service: $SERVICE_NAME
+const http = require('http');
+
+const port = process.env.PORT || $APP_PORT;
+const host = process.env.HOST || '0.0.0.0';
+
+const server = http.createServer((req, res) => {
+  const url = new URL(req.url, `http://${req.headers.host}`);
+  res.setHeader('Content-Type', 'application/json');
+
+  if (url.pathname === '/health') {
+    res.end(JSON.stringify({ status: 'healthy', service: '$SERVICE_NAME', type: '$SERVICE_TYPE', runtime: '$RUNTIME_VARIANT' }));
+    return;
+  }
+
+  if (url.pathname === '/') {
+    res.end(JSON.stringify({ message: 'Hello from $SERVICE_NAME!', service: '$SERVICE_NAME', type: '$SERVICE_TYPE', runtime: '$RUNTIME_VARIANT', port }));
+    return;
+  }
+
+  res.statusCode = 404;
+  res.end(JSON.stringify({ error: 'Not Found' }));
+});
+
+server.listen(port, host, () => {
+  console.log(`🚀 $SERVICE_NAME ($SERVICE_TYPE) running on http://${host}:${port}`);
+});
+EOF
+            fi
             ;;
             
         python)

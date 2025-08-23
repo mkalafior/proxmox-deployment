@@ -464,7 +464,7 @@
       become_user: "{{ app_user }}"
       when:
         - service_type == 'nodejs'
-        - (nodejs_runtime | default('bun')) == 'bun'
+        - nodejs_runtime == 'bun'
         - package_json_file.stat.exists
 
     - name: Create environment file
