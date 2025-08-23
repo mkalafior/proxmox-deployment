@@ -16,30 +16,30 @@ proxmox_token_secret: "{{ lookup('env', 'TOKEN_SECRET') | default('') }}"
 service_name: {{ service_name }}
 vm_name: {{ vm_name }}
 vm_id: {{ vm_id }}
-vm_cores: {{ vm_cores | default(1) }}
-vm_memory: {{ vm_memory | default(512) }}  # MB
-vm_disk_size: {{ vm_disk_size | default(5) }}  # GB
+vm_cores: {{ vm_cores | default(2) }}
+vm_memory: {{ vm_memory | default(2048) }}  # MB
+vm_disk_size: {{ vm_disk_size | default(20) }}  # GB
 vm_storage: {{ vm_storage | default('local-lvm') }}
 vm_os_template: "{{ lookup('env', 'VM_TEMPLATE') | default('local:vztmpl/ubuntu-24.04-standard_24.04-2_amd64.tar.zst') }}"
 
 # Network Configuration  
 vm_network_bridge: {{ vm_network_bridge | default('vmbr0') }}
-vm_swap: {{ vm_swap | default(256) }}  # MB
+vm_swap: {{ vm_swap | default(512) }}  # MB
 vm_unprivileged: {{ vm_unprivileged | default(true) }}
 
 # Application/Proxy Configuration
 app_name: {{ service_name }}
 app_user: {{ app_user | default('appuser') }}
-app_dir: {{ app_dir | default('/opt/' ~ service_name) }}
-app_service_name: {{ app_service_name | default(service_name) }}
-app_port: {{ app_port | default(9050) }}       # Tor SOCKS5
-http_proxy_port: {{ http_proxy_port | default(8118) }}  # Privoxy HTTP
+app_dir: {{ app_dir }}
+app_service_name: {{ app_service_name }}
+app_port: {{ app_port }}       # Tor SOCKS5
+http_proxy_port: 8118  # Privoxy HTTP
 
 # Service type (concrete)
 service_type: tor-proxy
 
 # Local source path (unused but kept for consistency)
-local_app_path: "{{ local_app_path | default('../../services/' ~ service_name) }}"
+local_app_path: "{{ local_app_path }}"
 
 # Security / firewall
 ssh_public_key_path: "{{ ansible_env.HOME }}/.ssh/id_proxmox.pub"
