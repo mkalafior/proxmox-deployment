@@ -370,18 +370,18 @@
       args:
         creates: /usr/local/bin/bun
       register: bun_install
-      when: service_type != 'database'
+      when: service_type == 'nodejs' and (nodejs_runtime | default('bun')) == 'bun'
 
     - name: Verify Bun installation
       command: bun --version
       register: bun_version
       changed_when: false
-      when: service_type != 'database'
+      when: service_type == 'nodejs' and (nodejs_runtime | default('bun')) == 'bun'
 
     - name: Display Bun version
       debug:
         msg: "Bun version: {{ bun_version.stdout }}"
-      when: service_type != 'database'
+      when: service_type == 'nodejs' and (nodejs_runtime | default('bun')) == 'bun'
 
     - name: Create application user
       user:
@@ -450,13 +450,22 @@
         recurse: yes
       when: service_type != 'database'
 
+    - name: Check if package.json exists
+      stat:
+        path: "{{ app_dir }}/package.json"
+      register: package_json_file
+      when: service_type == 'nodejs'
+
     - name: Install Bun dependencies
       shell: |
         /usr/local/bin/bun install
       args:
         chdir: "{{ app_dir }}"
       become_user: "{{ app_user }}"
-      when: service_type != 'database'
+      when:
+        - service_type == 'nodejs'
+        - (nodejs_runtime | default('bun')) == 'bun'
+        - package_json_file.stat.exists
 
     - name: Create environment file
       template:
