@@ -285,11 +285,7 @@
         ansible_user: root
         ansible_ssh_private_key_file: "{{ ssh_public_key_path | replace('.pub', '') }}"
 
-    - name: Save container IP locally for management scripts
-      copy:
-        content: "{{ container_ip }}\n"
-        dest: "./vm_ip.txt"
-        mode: "0644"
+    # No longer persisting IP to vm_ip.txt; DNS/Proxmox API will be used by CLI
 
   handlers:
     - name: reload systemd

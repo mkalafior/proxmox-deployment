@@ -75,14 +75,22 @@ execute_service_command() {
     local service_dir="deployments/$service"
     
     case "$command" in
-        status|logs|restart|info)
-            if [[ -f "$service_dir/manage.sh" ]]; then
-                log_service "Executing $command for $service"
-                (cd "$service_dir" && ./manage.sh "$command")
-            else
-                log_error "Management script not found for $service"
-                return 1
-            fi
+        status)
+            log_service "Executing status for $service via pxdcli"
+            PROJECT_ROOT_OVERRIDE="$(pwd)" tools/proxmox-deploy status "$service"
+            ;;
+        logs)
+            log_service "Executing logs for $service via pxdcli"
+            PROJECT_ROOT_OVERRIDE="$(pwd)" tools/proxmox-deploy logs "$service"
+            ;;
+        restart)
+            log_service "Executing restart for $service via pxdcli"
+            PROJECT_ROOT_OVERRIDE="$(pwd)" tools/proxmox-deploy restart "$service"
+            ;;
+        info)
+            log_service "Executing info for $service via pxdcli"
+            PROJECT_ROOT_OVERRIDE="$(pwd)" tools/proxmox-deploy info "$service"
+            ;;
             ;;
         deploy)
             if [[ -f "$service_dir/deploy.sh" ]]; then

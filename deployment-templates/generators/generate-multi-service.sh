@@ -468,6 +468,11 @@ fi
 
 # Create service directory and starter files
 create_service_starter() {
+    if [[ -d "$SERVICE_DIR" ]]; then
+        log_step "Service directory already exists, skipping starter scaffolding: $SERVICE_DIR"
+        return 0
+    fi
+
     log_step "Creating service starter files..."
     
     mkdir -p "$SERVICE_DIR"

@@ -8,20 +8,20 @@ echo "🧅 Tor-Proxy Service CLI Test"
 echo "=============================="
 
 HOST="${HOST:-tor-proxy.proxmox.local}"
-# Resolve target IP to avoid macOS .local mDNS issues; prefer deployment IP file
+# Resolve target IP to avoid macOS .local mDNS issues; prefer DNS or pxdcli ip
 TARGET="$HOST"
-DEPLOY_IP_FILE="./deployments/tor-proxy/vm_ip.txt"
-if [ -f "$DEPLOY_IP_FILE" ]; then
-    IP=$(cat "$DEPLOY_IP_FILE" | tr -d '[:space:]')
-    if [[ "$IP" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-        TARGET="$IP"
-    fi
+# Try DNS server resolution first
+DNS_SERVER="${DNS_SERVER:-192.168.1.11}"
+RESOLVED=$(nslookup "$HOST" "$DNS_SERVER" 2>/dev/null | awk '/^Address: /{print $2; exit}')
+if [[ "$RESOLVED" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    TARGET="$RESOLVED"
 else
-    # Try resolving via specified DNS server if provided
-    DNS_SERVER="${DNS_SERVER:-192.168.1.11}"
-    RESOLVED=$(nslookup "$HOST" "$DNS_SERVER" 2>/dev/null | awk '/^Address: /{print $2; exit}')
-    if [[ "$RESOLVED" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-        TARGET="$RESOLVED"
+    # Fallback to pxdcli ip (requires PROXMOX_* envs)
+    if command -v tools/proxmox-deploy >/dev/null 2>&1; then
+        IP=$(PROJECT_ROOT_OVERRIDE="$(pwd)" tools/proxmox-deploy ip tor-proxy 2>/dev/null | tr -d '[:space:]')
+        if [[ "$IP" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            TARGET="$IP"
+        fi
     fi
 fi
 

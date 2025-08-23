@@ -50,10 +50,7 @@
       failed_when: false
       changed_when: "delete_result.status == 200"
 
-    - name: Remove saved VM IP file
-      file:
-        path: "./vm_ip.txt"
-        state: absent
+    # vm_ip.txt is deprecated; nothing to remove
 
     - name: Print cleanup summary
       debug:

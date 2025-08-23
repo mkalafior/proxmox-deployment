@@ -247,12 +247,7 @@
         vm_id: "{{ vm_id }}"
       when: container_ip is defined
 
-    - name: Save container IP to file for future use
-      copy:
-        content: "{{ container_ip }}"
-        dest: "./vm_ip.txt"
-      delegate_to: localhost
-      when: container_ip is defined
+    # Note: We no longer persist IPs locally; use DNS/Proxmox API via CLI
 
 - name: Configure container and deploy {{ service_name }} application
   hosts: proxmox_containers

@@ -26,6 +26,50 @@ ensure_templates() {
   fi
 }
 
+# Helper: extract key from YAML (simple key: value) without yq
+yaml_get_key() {
+  local file="$1"; shift; local key="$1"; shift
+  [[ -f "$file" ]] || { echo ""; return 0; }
+  grep -E "^${key}:" "$file" | head -n1 | awk -F: '{print $2}' | xargs || true
+}
+
+# Helper: determine FQDN for a service
+service_fqdn() {
+  local svc_dir="$1"; shift
+  local gv="$svc_dir/group_vars/all.yml"
+  local host="$(yaml_get_key "$gv" "service_hostname")"
+  local domain="$(yaml_get_key "$gv" "dns_domain")"
+  if [[ -n "$host" && -n "$domain" ]]; then
+    echo "$host.$domain"
+  else
+    echo ""
+  fi
+}
+
+# Helper: get VM IP via Proxmox API using node and VM_ID
+service_ip_via_api() {
+  local svc_dir="$1"; shift
+  local gv="$svc_dir/group_vars/all.yml"
+  local node="$(yaml_get_key "$gv" "proxmox_node")"
+  local vmid=""
+  if [[ -f "$svc_dir/env.service" ]]; then
+    # shellcheck disable=SC1090
+    source "$svc_dir/env.service" 2>/dev/null || true
+    vmid="${VM_ID:-}"
+  fi
+  if [[ -z "${PROXMOX_HOST:-}" || -z "${TOKEN_ID:-}" || -z "${TOKEN_SECRET:-}" || -z "$node" || -z "$vmid" ]]; then
+    echo ""; return 0
+  fi
+  local url="https://${PROXMOX_HOST}:8006/api2/json/nodes/${node}/lxc/${vmid}/interfaces"
+  local resp
+  resp=$(curl -ks -H "Authorization: PVEAPIToken=${TOKEN_ID}=${TOKEN_SECRET}" "$url" 2>/dev/null || true)
+  if command -v jq >/dev/null 2>&1; then
+    echo "$resp" | jq -r '.data[] | select(.name=="eth0") | .inet[0] // ""' | sed 's#/.*$##' | head -n1
+  else
+    echo "$resp" | grep -o '"name":"eth0"[^{]*\{[^}]*\}' | grep -o '"inet":[^\]]*' | grep -Eo '"[0-9.]+/[0-9]+"' | head -n1 | tr -d '"' | sed 's#/.*$##'
+  fi
+}
+
 usage() {
   echo "pxdcli <command> [args]"
   echo "Commands:"
@@ -33,7 +77,11 @@ usage() {
   echo "  update [services...] [--force]"
   echo "  deploy <service>"
   echo "  list                         # List services under PROJECT_ROOT/deployments"
-  echo "  restart <service>            # Restart app (or DB service) inside container"
+  echo "  status [service]             # Show service status (hostname-based)"
+  echo "  logs <service>               # Show recent logs via SSH"
+  echo "  restart <service>            # Restart service unit via SSH"
+  echo "  info <service>               # Show service info (FQDN, IP, ports)"
+  echo "  ssh <service>                # SSH into service host"
   echo "  nodes                        # List Proxmox nodes (requires TOKEN_ID/TOKEN_SECRET)"
   echo "  help"
 }
@@ -73,14 +121,105 @@ case "$CMD" in
         echo "   Port: ${APP_PORT:-unknown}"
         echo "   Subdomain: ${APP_SUBDOMAIN:-unknown}"
       fi
-      if [[ -f "$root_dir/$svc/vm_ip.txt" ]]; then
-        vm_ip=$(tr -d '[:space:]' < "$root_dir/$svc/vm_ip.txt")
-        echo "   Status: 🟢 Deployed (IP: $vm_ip)"
-      else
-        echo "   Status: ⚪ Not deployed"
+      # Show DNS-based reachability
+      fqdn=""
+      if [[ -f "$root_dir/$svc/group_vars/all.yml" ]]; then
+        service_host=$(grep -E '^service_hostname:' "$root_dir/$svc/group_vars/all.yml" | awk -F: '{print $2}' | xargs || true)
+        dns_domain=$(grep -E '^dns_domain:' "$root_dir/$svc/group_vars/all.yml" | awk -F: '{print $2}' | xargs || true)
+        if [[ -n "$service_host" && -n "$dns_domain" ]]; then
+          fqdn="$service_host.$dns_domain"
+        fi
       fi
+      if [[ -n "$fqdn" ]]; then
+        ip_resolved=$(getent hosts "$fqdn" 2>/dev/null | awk '{print $1}' | head -n1 || true)
+        if [[ -z "$ip_resolved" ]]; then
+          # macOS fallback
+          ip_resolved=$(dig +short "$fqdn" 2>/dev/null | head -n1 || true)
+        fi
+        if [[ -n "$ip_resolved" ]]; then
+          echo "   DNS: 🟢 $fqdn → $ip_resolved"
+        else
+          echo "   DNS: ⚪ $fqdn (unresolved)"
+        fi
+      fi
+      # API IP (if creds available)
+      api_ip=$(service_ip_via_api "$root_dir/$svc")
+      [[ -n "$api_ip" ]] && echo "   API IP: $api_ip"
       echo ""
     done
+    ;;
+  manage)
+    # Alias of status for now
+    shift || true
+    set -- status "$@"
+    exec "$0" "$@"
+    ;;
+  status)
+    target_svc="${1:-}"
+    root_dir="$PROJECT_ROOT_OVERRIDE/deployments"
+    if [[ -z "$target_svc" ]]; then
+      # all services
+      find "$root_dir" -mindepth 1 -maxdepth 1 -type d -exec basename {} \; | sort | while read -r svc; do
+        [[ -z "$svc" ]] && continue
+        svc_dir="$root_dir/$svc"
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        # Build FQDN
+        fqdn=""
+        app_port=""
+        [[ -f "$svc_dir/env.service" ]] && { source "$svc_dir/env.service" 2>/dev/null || true; app_port="${APP_PORT:-}"; }
+        if [[ -f "$svc_dir/group_vars/all.yml" ]]; then
+          service_host=$(grep -E '^service_hostname:' "$svc_dir/group_vars/all.yml" | awk -F: '{print $2}' | xargs || true)
+          dns_domain=$(grep -E '^dns_domain:' "$svc_dir/group_vars/all.yml" | awk -F: '{print $2}' | xargs || true)
+          if [[ -n "$service_host" && -n "$dns_domain" ]]; then fqdn="$service_host.$dns_domain"; fi
+        fi
+        echo "[${svc}]"
+        if [[ -z "$fqdn" ]]; then echo "  FQDN: unknown"; echo ""; continue; fi
+        echo "  FQDN: $fqdn"
+        api_ip=$(service_ip_via_api "$svc_dir"); [[ -n "$api_ip" ]] && echo "  IP(API): $api_ip"
+        ssh -i "$HOME/.ssh/id_proxmox" -o StrictHostKeyChecking=no -o BatchMode=yes -o ConnectTimeout=5 root@"$fqdn" "systemctl is-active ${svc} || true; ss -tlnp | grep :${app_port:-0} || true" 2>/dev/null | sed 's/^/  /'
+        echo ""
+      done
+    else
+      svc_dir="$PROJECT_ROOT_OVERRIDE/deployments/$target_svc"
+      if [[ ! -d "$svc_dir" ]]; then echo "Service not found: $target_svc"; exit 1; fi
+      fqdn=""; app_port=""
+      [[ -f "$svc_dir/env.service" ]] && { source "$svc_dir/env.service" 2>/dev/null || true; app_port="${APP_PORT:-}"; }
+      if [[ -f "$svc_dir/group_vars/all.yml" ]]; then
+        service_host=$(grep -E '^service_hostname:' "$svc_dir/group_vars/all.yml" | awk -F: '{print $2}' | xargs || true)
+        dns_domain=$(grep -E '^dns_domain:' "$svc_dir/group_vars/all.yml" | awk -F: '{print $2}' | xargs || true)
+        if [[ -n "$service_host" && -n "$dns_domain" ]]; then fqdn="$service_host.$dns_domain"; fi
+      fi
+      echo "Service: $target_svc"
+      echo "FQDN: ${fqdn:-unknown}"
+      api_ip=$(service_ip_via_api "$svc_dir"); [[ -n "$api_ip" ]] && echo "IP(API): $api_ip"
+      if [[ -n "$fqdn" ]]; then
+        ssh -i "$HOME/.ssh/id_proxmox" -o StrictHostKeyChecking=no -o BatchMode=yes -o ConnectTimeout=5 root@"$fqdn" "
+          echo '🔍 Service:'; systemctl status ${target_svc} --no-pager -n 5 || true
+          echo ''; echo '🌐 Ports:'; ss -tlnp | grep :${app_port:-0} || true
+        "
+      fi
+    fi
+    ;;
+  ip)
+    svc="${1:-}"
+    if [[ -z "$svc" ]]; then echo "Missing service name"; exit 1; fi
+    svc_dir="$PROJECT_ROOT_OVERRIDE/deployments/$svc"
+    if [[ ! -d "$svc_dir" ]]; then echo "Service not found: $svc"; exit 1; fi
+    ip=$(service_ip_via_api "$svc_dir")
+    if [[ -n "$ip" ]]; then echo "$ip"; else echo ""; fi
+    ;;
+  logs)
+    svc="${1:-}"
+    if [[ -z "$svc" ]]; then echo "Missing service name"; exit 1; fi
+    svc_dir="$PROJECT_ROOT_OVERRIDE/deployments/$svc"
+    if [[ ! -d "$svc_dir" ]]; then echo "Service not found: $svc"; exit 1; fi
+    fqdn=""; [[ -f "$svc_dir/group_vars/all.yml" ]] && {
+      service_host=$(grep -E '^service_hostname:' "$svc_dir/group_vars/all.yml" | awk -F: '{print $2}' | xargs || true)
+      dns_domain=$(grep -E '^dns_domain:' "$svc_dir/group_vars/all.yml" | awk -F: '{print $2}' | xargs || true)
+      [[ -n "$service_host" && -n "$dns_domain" ]] && fqdn="$service_host.$dns_domain";
+    }
+    if [[ -z "$fqdn" ]]; then echo "FQDN not found for $svc"; exit 1; fi
+    ssh -i "$HOME/.ssh/id_proxmox" -o StrictHostKeyChecking=no root@"$fqdn" "journalctl -u ${svc} --no-pager -n 100"
     ;;
   nodes)
     # List Proxmox nodes using API token
@@ -100,12 +239,49 @@ case "$CMD" in
     svc="${1:-}"
     if [[ -z "$svc" ]]; then echo "Missing service name"; exit 1; fi
     svc_dir="$PROJECT_ROOT_OVERRIDE/deployments/$svc"
-    if [[ -x "$svc_dir/manage.sh" ]]; then
-      ( cd "$svc_dir" && ./manage.sh restart )
-    else
-      echo "manage.sh not found for $svc"
-      exit 1
+    if [[ ! -d "$svc_dir" ]]; then echo "Service not found: $svc"; exit 1; fi
+    fqdn=""; [[ -f "$svc_dir/group_vars/all.yml" ]] && {
+      service_host=$(grep -E '^service_hostname:' "$svc_dir/group_vars/all.yml" | awk -F: '{print $2}' | xargs || true)
+      dns_domain=$(grep -E '^dns_domain:' "$svc_dir/group_vars/all.yml" | awk -F: '{print $2}' | xargs || true)
+      [[ -n "$service_host" && -n "$dns_domain" ]] && fqdn="$service_host.$dns_domain";
+    }
+    if [[ -z "$fqdn" ]]; then echo "FQDN not found for $svc"; exit 1; fi
+    ssh -i "$HOME/.ssh/id_proxmox" -o StrictHostKeyChecking=no root@"$fqdn" "systemctl restart ${svc} && systemctl status ${svc} --no-pager -n 5" || exit 1
+    ;;
+  info)
+    svc="${1:-}"
+    if [[ -z "$svc" ]]; then echo "Missing service name"; exit 1; fi
+    svc_dir="$PROJECT_ROOT_OVERRIDE/deployments/$svc"
+    if [[ ! -d "$svc_dir" ]]; then echo "Service not found: $svc"; exit 1; fi
+    [[ -f "$svc_dir/env.service" ]] && source "$svc_dir/env.service" 2>/dev/null || true
+    fqdn=""; [[ -f "$svc_dir/group_vars/all.yml" ]] && {
+      service_host=$(grep -E '^service_hostname:' "$svc_dir/group_vars/all.yml" | awk -F: '{print $2}' | xargs || true)
+      dns_domain=$(grep -E '^dns_domain:' "$svc_dir/group_vars/all.yml" | awk -F: '{print $2}' | xargs || true)
+      [[ -n "$service_host" && -n "$dns_domain" ]] && fqdn="$service_host.$dns_domain";
+    }
+    echo "Service: $svc"
+    echo "VM ID: ${VM_ID:-unknown}"
+    echo "Port: ${APP_PORT:-unknown}"
+    echo "FQDN: ${fqdn:-unknown}"
+    if [[ -n "$fqdn" ]]; then
+      ip_resolved=$(getent hosts "$fqdn" 2>/dev/null | awk '{print $1}' | head -n1 || true)
+      [[ -z "$ip_resolved" ]] && ip_resolved=$(dig +short "$fqdn" 2>/dev/null | head -n1 || true)
+      [[ -n "$ip_resolved" ]] && echo "IP: $ip_resolved"
+      [[ -n "${APP_PORT:-}" ]] && echo "URL: http://$fqdn:${APP_PORT}"
     fi
+    ;;
+  ssh)
+    svc="${1:-}"
+    if [[ -z "$svc" ]]; then echo "Missing service name"; exit 1; fi
+    svc_dir="$PROJECT_ROOT_OVERRIDE/deployments/$svc"
+    if [[ ! -d "$svc_dir" ]]; then echo "Service not found: $svc"; exit 1; fi
+    fqdn=""; [[ -f "$svc_dir/group_vars/all.yml" ]] && {
+      service_host=$(grep -E '^service_hostname:' "$svc_dir/group_vars/all.yml" | awk -F: '{print $2}' | xargs || true)
+      dns_domain=$(grep -E '^dns_domain:' "$svc_dir/group_vars/all.yml" | awk -F: '{print $2}' | xargs || true)
+      [[ -n "$service_host" && -n "$dns_domain" ]] && fqdn="$service_host.$dns_domain";
+    }
+    if [[ -z "$fqdn" ]]; then echo "FQDN not found for $svc"; exit 1; fi
+    exec ssh -i "$HOME/.ssh/id_proxmox" root@"$fqdn"
     ;;
   help|*)
     usage

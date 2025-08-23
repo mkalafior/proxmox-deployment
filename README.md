@@ -112,7 +112,7 @@ From the root of your real project (no templates copied):
 pxdcli generate api-service --type nodejs --runtime bun --port 3001
 
 # Or specify node and VM ID manually
-pxdcli generate postgres-db --type database --runtime postgresql --node pve2 --vm-id 204 --port 5432 \
+pxdcli generate postgres-db --type database --runtime postgresql --node pve --vm-id 204 --port 5432 \
   --db-name myapp --db-user myuser --db-pass secret123
 
 # 2) Update generated deployments after template changes
@@ -132,19 +132,16 @@ Advanced:
 
 ```bash
 # Interactive generation (recommended - auto-selects node and VM ID)
-./manage-services.sh generate api-service
+pxdcli generate api-service
 
 # Direct command with auto VM ID selection
-./deployment-templates/generators/generate-multi-service.sh \
-  api-service --type nodejs --runtime bun --port 3001
+pxdcli generate api-service --type nodejs --runtime bun --port 3001
 
 # Specify node manually (auto VM ID selection)
-./deployment-templates/generators/generate-multi-service.sh \
-  python-api --type python --port 8000 --node pve2
+pxdcli generate python-api --type python --port 8000 --node pve2
 
 # Full manual control
-./deployment-templates/generators/generate-multi-service.sh \
-  postgres-db --type database --runtime postgresql \
+pxdcli generate postgres-db --type database --runtime postgresql \
   --node pve1 --vm-id 204 --port 5432 --db-name myapp --db-user myuser --db-pass secret123
 ```
 
@@ -152,10 +149,10 @@ Advanced:
 
 ```bash
 # Deploy single service
-./manage-services.sh deploy python-api
+pxdcli deploy python-api
 
 # Deploy all services
-./manage-services.sh deploy
+pxdcli deploy
 
 # Or deploy from service directory
 cd deployments/python-api && ./deploy.sh
@@ -169,7 +166,7 @@ The CLI now provides intelligent automation for node and VM ID selection:
 
 **Interactive 3-Step Process:**
 ```bash
-./manage-services.sh generate my-service
+pxdcli generate my-service
 
 # Step 1: Shows available Proxmox nodes, asks for selection
 # Step 2: Auto-finds first available VM ID on selected node
@@ -184,37 +181,35 @@ The CLI now provides intelligent automation for node and VM ID selection:
 **Examples:**
 ```bash
 # Interactive with auto-selection (recommended)
-./manage-services.sh generate api-service
+pxdcli generate api-service
 
 # Auto VM ID on specific node
-./deployment-templates/generators/generate-multi-service.sh \
-  api-service --type nodejs --port 3001 --node pve2
+pxdcli generate api-service --type nodejs --port 3001 --node pve2
 
 # Full manual control
-./deployment-templates/generators/generate-multi-service.sh \
-  api-service --type nodejs --port 3001 --node pve2 --vm-id 150
+pxdcli generate api-service --type nodejs --port 3001 --node pve2 --vm-id 150
 ```
 
 ### 3. Manage Services
 
 ```bash
 # List all services
-./manage-services.sh list
+pxdcli list
 
 # Check status of all services
-./manage-services.sh status
+pxdcli status
 
 # Check specific service
-./manage-services.sh status python-api
+pxdcli status python-api
 
 # View logs
-./manage-services.sh logs python-api
+pxdcli logs python-api
 
 # Restart service
-./manage-services.sh restart python-api
+pxdcli restart python-api
 
 # Clean up service
-./manage-services.sh cleanup python-api
+pxdcli cleanup python-api
 ```
 
 ## 🔧 Configuration
@@ -248,10 +243,10 @@ proxmox_node: pve  # Deploy this service to specific node
 ```
 
 **Workflow:**
-1. **Generate service**: `./deployment-templates/generators/generate-service-deployment.sh --service-name myservice --vm-id 203`
+1. **Generate service**: `pxdcli generate myservice --vm-id 203`
 2. **Set target node**: Edit `deployments/myservice/service-config.yml` and set `proxmox_node: your-node`
-3. **Update config**: `./deployment-templates/update-deployments.sh myservice`
-4. **Deploy**: `cd deployments/myservice && ./deploy.sh`
+3. **Update config**: `pxdcli update myservice`
+4. **Deploy**: `pxdcli deploy myservice`
 
 **Example - Multi-node deployment:**
 ```bash
@@ -265,8 +260,8 @@ echo "proxmox_node: pve2" >> deployments/postgres-db/service-config.yml
 echo "proxmox_node: pve3" >> deployments/redis-cache/service-config.yml
 
 # Update and deploy all
-./deployment-templates/update-deployments.sh
-./manage-services.sh deploy
+pxdcli update
+pxdcli deploy
 ```
 
 ## 🌐 Service Communication
@@ -299,30 +294,29 @@ Each service has its own management script:
 cd deployments/python-api
 
 # Service operations
-./manage.sh status    # Show service status
-./manage.sh logs      # Show service logs  
-./manage.sh restart   # Restart service
-./manage.sh info      # Show deployment info
+pxdcli status python-api    # Show service status
+pxdcli logs python-api      # Show service logs  
+pxdcli restart python-api   # Restart service
 
 # Deployment operations
-./deploy.sh           # Deploy/redeploy service
-./cleanup.sh          # Remove service and VM
+pxdcli deploy python-api    # Deploy/redeploy service
+pxdcli cleanup python-api   # Remove service and VM
 ```
 
 ### Multi-Service Management
-Use the root-level script:
+Use the CLI:
 
 ```bash
 # Service discovery
-./manage-services.sh list
+pxdcli list
 
 # Bulk operations
-./manage-services.sh status          # All services status
-./manage-services.sh deploy          # Deploy all services
+echo "All services status:" && pxdcli status
+pxdcli deploy          # Deploy all services
 
 # Individual operations
-./manage-services.sh logs python-api
-./manage-services.sh restart go-api
+pxdcli logs python-api
+pxdcli restart go-api
 ```
 
 ## 🔐 Security & Networking
@@ -346,7 +340,7 @@ Use the root-level script:
 
 ### 1. Create Service
 ```bash
-./manage-services.sh generate my-new-service
+pxdcli generate my-new-service
 
 # Interactive 3-step process:
 # Step 1: Node Selection - Shows available Proxmox nodes, asks for selection
@@ -363,36 +357,34 @@ cd services/my-new-service
 
 ### 3. Deploy
 ```bash
-./manage-services.sh deploy my-new-service
+pxdcli deploy my-new-service
 ```
 
 ### 4. Monitor
 ```bash
-./manage-services.sh status my-new-service
-./manage-services.sh logs my-new-service
+pxdcli status my-new-service
+pxdcli logs my-new-service
 ```
 
 ## 🎯 Real-World Example: E-commerce Microservices
 
 ```bash
 # Interactive generation (recommended - auto-selects nodes and VM IDs)
-./manage-services.sh generate api-gateway
-./manage-services.sh generate user-service
-./manage-services.sh generate order-service
-./manage-services.sh generate main-db
-./manage-services.sh generate redis-cache
-./manage-services.sh generate web-frontend
+pxdcli generate api-gateway
+pxdcli generate user-service
+pxdcli generate order-service
+pxdcli generate main-db
+pxdcli generate redis-cache
+pxdcli generate web-frontend
 
 # Or use direct commands with auto-selection
-./deployment-templates/generators/generate-multi-service.sh \
-  api-gateway --type nodejs --runtime bun --port 3000 --node pve1
+pxdcli generate api-gateway --type nodejs --runtime bun --port 3000 --node pve
 
-./deployment-templates/generators/generate-multi-service.sh \
-  main-db --type database --runtime postgresql \
-  --port 5432 --db-name ecommerce --node pve2
+pxdcli generate main-db --type database --runtime postgresql \
+  --port 5432 --db-name ecommerce --node pve
 
 # Deploy all services
-./manage-services.sh deploy
+pxdcli deploy
 ```
 
 ## 🔍 Troubleshooting
@@ -415,20 +407,19 @@ curl -ks -H "Authorization: PVEAPIToken=${TOKEN_ID}=${TOKEN_SECRET}" \
 
 ### Check Service Status
 ```bash
-./manage-services.sh status service-name
+pxdcli status service-name
 ```
 
 ### View Logs
 ```bash
-./manage-services.sh logs service-name
+pxdcli logs service-name
 ```
 
 ### SSH into VM
 ```bash
-# Get VM IP
-cat deployments/service-name/vm_ip.txt
-
-# SSH into VM
+# Check service info and SSH via pxdcli (hostname-based)
+pxdcli info service-name
+pxdcli ssh service-name
 ssh -i ~/.ssh/id_proxmox root@<VM_IP>
 ```
 
@@ -445,29 +436,29 @@ When you modify templates, you don't need to regenerate all services:
 ### Update All Services
 ```bash
 # Preview changes
-./update-templates.sh --dry-run
+pxdcli update --dry-run
 
 # Apply updates to all services
-./update-templates.sh
+pxdcli update
 ```
 
 ### Selective Updates
 ```bash
 # Update only Node.js services
-./update-templates.sh --template nodejs
+pxdcli update --template nodejs
 
 # Update only specific services
-./update-templates.sh service01 service02
+pxdcli update service01 service02
 
 # Update only deploy.yml files
-./update-templates.sh --file deploy.yml.j2
+pxdcli update --file deploy.yml.j2
 ```
 
 ### Template Update Workflow
 1. **Modify Template**: Edit `deployment-templates/base/deploy.yml.j2`
 2. **Update Version**: Edit `deployment-templates/.template-version`
-3. **Preview Changes**: `./update-templates.sh --dry-run`
-4. **Apply Updates**: `./update-templates.sh`
+3. **Preview Changes**: `pxdcli update --dry-run`
+4. **Apply Updates**: `pxdcli update`
 
 ### Benefits
 - ✅ **Preserves** service-specific configurations
