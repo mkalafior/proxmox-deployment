@@ -332,7 +332,8 @@
     - name: Force IPv4 for apt to avoid IPv6-only mirror issues
       copy:
         dest: /etc/apt/apt.conf.d/99force-ipv4
-        content: 'Acquire::ForceIPv4 "true";\n'
+        content: |
+          Acquire::ForceIPv4 "true";
         owner: root
         group: root
         mode: '0644'
@@ -357,8 +358,16 @@
       apt:
         name:
           - docker.io
-          - docker-compose
+          - python3-docker
+          - curl
+          - ca-certificates
         state: present
+
+    - name: Remove legacy docker-compose package if present (not required)
+      apt:
+        name: docker-compose
+        state: absent
+      ignore_errors: true
 
     - name: Ensure Docker service is running
       systemd:
