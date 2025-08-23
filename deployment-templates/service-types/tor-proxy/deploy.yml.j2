@@ -312,7 +312,6 @@
         name: privoxy
         state: present
         system: yes
-      when: "'privoxy' in ansible_facts.packages"
 
     - name: Ensure Tor directories exist
       file:
