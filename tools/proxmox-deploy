@@ -179,7 +179,10 @@ case "$CMD" in
         if [[ -z "$fqdn" ]]; then echo "  FQDN: unknown"; echo ""; continue; fi
         echo "  FQDN: $fqdn"
         api_ip=$(service_ip_via_api "$svc_dir"); [[ -n "$api_ip" ]] && echo "  IP(API): $api_ip"
-        ssh -i "$HOME/.ssh/id_proxmox" -o StrictHostKeyChecking=no -o BatchMode=yes -o ConnectTimeout=5 root@"$fqdn" "systemctl is-active ${svc} || true; ss -tlnp | grep :${app_port:-0} || true" 2>/dev/null | sed 's/^/  /'
+        ssh_host="$fqdn"; [[ -n "$api_ip" ]] && ssh_host="$api_ip"
+        if [[ -n "$ssh_host" ]]; then
+          ssh -i "$HOME/.ssh/id_proxmox" -o StrictHostKeyChecking=no -o BatchMode=yes -o ConnectTimeout=5 root@"$ssh_host" "systemctl is-active ${svc} || true; ss -tlnp | grep :${app_port:-0} || true" 2>/dev/null | sed 's/^/  /'
+        fi
         echo ""
       done
     else
@@ -195,8 +198,9 @@ case "$CMD" in
       echo "Service: $target_svc"
       echo "FQDN: ${fqdn:-unknown}"
       api_ip=$(service_ip_via_api "$svc_dir"); [[ -n "$api_ip" ]] && echo "IP(API): $api_ip"
-      if [[ -n "$fqdn" ]]; then
-        ssh -i "$HOME/.ssh/id_proxmox" -o StrictHostKeyChecking=no -o BatchMode=yes -o ConnectTimeout=5 root@"$fqdn" "
+      ssh_host="$fqdn"; [[ -n "$api_ip" ]] && ssh_host="$api_ip"
+      if [[ -n "$ssh_host" ]]; then
+        ssh -i "$HOME/.ssh/id_proxmox" -o StrictHostKeyChecking=no -o BatchMode=yes -o ConnectTimeout=5 root@"$ssh_host" "
           echo '🔍 Service:'; systemctl status ${target_svc} --no-pager -n 5 || true
           echo ''; echo '🌐 Ports:'; ss -tlnp | grep :${app_port:-0} || true
         "
