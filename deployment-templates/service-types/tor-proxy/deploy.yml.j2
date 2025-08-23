@@ -318,6 +318,36 @@
     docker_image: "dperson/torproxy:latest"
 
   tasks:
+    - name: Ensure resolv.conf has reachable DNS servers (avoid apt DNS failures)
+      copy:
+        dest: /etc/resolv.conf
+        content: |
+          nameserver 1.1.1.1
+          nameserver 8.8.8.8
+          options edns0 trust-ad
+        owner: root
+        group: root
+        mode: '0644'
+
+    - name: Force IPv4 for apt to avoid IPv6-only mirror issues
+      copy:
+        dest: /etc/apt/apt.conf.d/99force-ipv4
+        content: 'Acquire::ForceIPv4 "true";\n'
+        owner: root
+        group: root
+        mode: '0644'
+
+    - name: Set Ubuntu apt sources explicitly (noble main, updates, security)
+      copy:
+        dest: /etc/apt/sources.list
+        content: |
+          deb http://archive.ubuntu.com/ubuntu noble main restricted universe multiverse
+          deb http://archive.ubuntu.com/ubuntu noble-updates main restricted universe multiverse
+          deb http://archive.ubuntu.com/ubuntu noble-security main restricted universe multiverse
+        owner: root
+        group: root
+        mode: '0644'
+
     - name: Update apt cache
       apt:
         update_cache: yes
