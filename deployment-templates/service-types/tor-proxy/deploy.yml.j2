@@ -296,10 +296,6 @@
         port: 22
         timeout: 60
 
-    - name: Set static container IP
-      set_fact:
-        container_ip: "192.168.1.{{ vm_id }}"
-
     - name: Add container to dynamic inventory
       add_host:
         name: "{{ container_ip }}"
