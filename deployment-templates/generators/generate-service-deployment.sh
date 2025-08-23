@@ -611,6 +611,10 @@ else
         SERVICE_TYPE_CFG="nodejs"
     fi
     ensure_kv "service_type" "$SERVICE_TYPE_CFG"
+    if [[ "$SERVICE_TYPE_CFG" == "nodejs" ]]; then
+        RUNTIME_VAL=$(grep -E '^(nodejs_runtime|runtime_variant):' "$DEPLOYMENT_DIR/service-config.yml" | head -n1 | awk -F: '{print $2}' | xargs || echo "bun")
+        ensure_kv "nodejs_runtime" "${RUNTIME_VAL}"
+    fi
 fi
 
 log_info "✅ Generated Ansible configuration"
@@ -622,6 +626,16 @@ cp -r "$TEMPLATE_DIR/templates/"* "$DEPLOYMENT_DIR/templates/"
 # Rename the generic service template to match the service name
 if [[ -f "$DEPLOYMENT_DIR/templates/hello-world-bun-app.service.j2" ]]; then
     mv "$DEPLOYMENT_DIR/templates/hello-world-bun-app.service.j2" "$DEPLOYMENT_DIR/templates/${SERVICE_NAME}.service.j2"
+fi
+
+# Adjust systemd unit for NodeJS runtime=node
+if [[ -f "$DEPLOYMENT_DIR/service-config.yml" ]]; then
+  svc_type=$(grep -E '^service_type:' "$DEPLOYMENT_DIR/service-config.yml" | awk -F: '{print $2}' | xargs || true)
+  runtime=$(grep -E '^(nodejs_runtime|runtime_variant):' "$DEPLOYMENT_DIR/service-config.yml" | head -n1 | awk -F: '{print $2}' | xargs || true)
+  if [[ "$svc_type" == "nodejs" && "$runtime" == "node" ]]; then
+    sed -i '' 's|^Description=.*|Description={{ app_name }} - Node Application|' "$DEPLOYMENT_DIR/templates/${SERVICE_NAME}.service.j2" || true
+    sed -i '' 's|^ExecStart=.*|ExecStart=/usr/bin/node index.js|' "$DEPLOYMENT_DIR/templates/${SERVICE_NAME}.service.j2" || true
+  fi
 fi
 
 # Generate service-specific environment file

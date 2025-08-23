@@ -464,7 +464,25 @@
       become_user: "{{ app_user }}"
       when:
         - service_type == 'nodejs'
-        - nodejs_runtime == 'bun'
+        - (nodejs_runtime | default('bun')) == 'bun'
+        - package_json_file.stat.exists
+
+    - name: Install Node.js runtime (apt)
+      apt:
+        name:
+          - nodejs
+          - npm
+        state: present
+      when: service_type == 'nodejs' and (nodejs_runtime | default('bun')) == 'node'
+
+    - name: Install npm dependencies
+      shell: npm install --production
+      args:
+        chdir: "{{ app_dir }}"
+      become_user: "{{ app_user }}"
+      when:
+        - service_type == 'nodejs'
+        - (nodejs_runtime | default('bun')) == 'node'
         - package_json_file.stat.exists
 
     - name: Create environment file
