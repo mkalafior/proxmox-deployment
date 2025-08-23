@@ -388,7 +388,6 @@
           TOR_NewCircuitPeriod: "{{ tor_new_circuit }}"
           TOR_MaxCircuitDirtiness: "{{ tor_max_dirtiness }}"
         restart_policy: unless-stopped
-        network_mode: host
         state: started
         recreate: yes
 
