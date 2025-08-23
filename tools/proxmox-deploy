@@ -64,7 +64,10 @@ service_ip_via_api() {
   local resp
   resp=$(curl -ks -H "Authorization: PVEAPIToken=${TOKEN_ID}=${TOKEN_SECRET}" "$url" 2>/dev/null || true)
   if command -v jq >/dev/null 2>&1; then
-    echo "$resp" | jq -r '.data[] | select(.name=="eth0") | .inet[0] // ""' | sed 's#/.*$##' | head -n1
+    echo "$resp" | jq -r '(
+      .data[]? | select(.name=="eth0") |
+      (.inet | if type=="array" then .[0] elif type=="string" then . else "" end)
+    ) // ""' | sed 's#/.*$##' | head -n1
   else
     echo "$resp" | grep -o '"name":"eth0"[^{]*\{[^}]*\}' | grep -o '"inet":[^\]]*' | grep -Eo '"[0-9.]+/[0-9]+"' | head -n1 | tr -d '"' | sed 's#/.*$##'
   fi
