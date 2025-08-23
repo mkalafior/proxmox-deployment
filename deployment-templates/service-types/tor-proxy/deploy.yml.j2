@@ -383,7 +383,6 @@
           listen-address 0.0.0.0:{{ http_proxy_port }}
           forward-socks5t / 127.0.0.1:{{ socks_port }} .
           logfile /var/log/privoxy/logfile
-          pidfile /run/privoxy/privoxy.pid
           actionsfile default.action
           filterfile default.filter
           debug 1
