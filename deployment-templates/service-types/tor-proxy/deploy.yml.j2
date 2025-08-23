@@ -1,5 +1,5 @@
 ---
-# Deployment playbook for {{ service_name }} tor-proxy service
+# Deployment playbook for {{ service_name }} tor-proxy service using Docker
 - name: Deploy {{ service_name }} to Proxmox VE
   hosts: localhost
   connection: local
@@ -304,7 +304,7 @@
         ansible_user: root
         ansible_ssh_private_key_file: "{{ ssh_public_key_path | replace('.pub', '') }}"
 
-- name: Configure container and deploy {{ service_name }} tor-proxy
+- name: Configure container and deploy {{ service_name }} tor-proxy using Docker
   hosts: proxmox_containers
   become: true
   vars_files:
@@ -315,6 +315,7 @@
     http_proxy_port: "{{ custom_env_vars.HTTP_PROXY_PORT | default(8118) }}"
     tor_new_circuit: "{{ custom_env_vars.TOR_NewCircuitPeriod | default(60) }}"
     tor_max_dirtiness: "{{ custom_env_vars.TOR_MaxCircuitDirtiness | default(600) }}"
+    docker_image: "dperson/torproxy:latest"
 
   tasks:
     - name: Update apt cache
@@ -322,101 +323,74 @@
         update_cache: yes
         cache_valid_time: 3600
 
-    - name: Install Tor and Privoxy
+    - name: Install Docker and dependencies
       apt:
         name:
-          - tor
-          - privoxy
+          - docker.io
+          - docker-compose
         state: present
 
-    - name: Ensure privoxy group exists
-      group:
-        name: privoxy
-        state: present
-        system: yes
+    - name: Ensure Docker service is running
+      systemd:
+        name: docker
+        enabled: yes
+        state: started
 
-    - name: Add privoxy user to privoxy group
-      user:
-        name: privoxy
-        group: privoxy
-
-    - name: Ensure Tor directories exist
+    - name: Create tor-proxy data directory
       file:
-        path: "{{ item }}"
+        path: /opt/tor-proxy
         state: directory
-        owner: debian-tor
-        group: debian-tor
-        mode: '0700'
-      loop:
-        - /var/lib/tor
-        - /var/log/tor
-
-    - name: Ensure Privoxy log directory exists
-      file:
-        path: /var/log/privoxy
-        state: directory
-        owner: privoxy
-        group: privoxy
+        owner: root
+        group: root
         mode: '0755'
 
-    - name: Configure torrc
+    - name: Create docker-compose.yml for tor-proxy
       copy:
-        dest: /etc/tor/torrc
+        dest: /opt/tor-proxy/docker-compose.yml
         content: |
-          SocksPort 0.0.0.0:{{ socks_port }}
-          SocksListenAddress 0.0.0.0
-          Log notice stdout
-          DataDirectory /var/lib/tor
-          Log notice file /var/log/tor/notices.log
-          NewCircuitPeriod {{ tor_new_circuit }}
-          MaxCircuitDirtiness {{ tor_max_dirtiness }}
-          ExitNodes {us},{ca},{gb},{de},{nl},{se},{no},{dk},{fi},{fr},{ch},{at},{be},{es},{it},{pt},{pl},{cz},{sk},{hu},{ro},{bg},{gr},{ee},{lv},{lt},{lu},{mt},{si},{hr},{cy},{ie},{is},{li},{mc},{sm},{va},{ad},{al},{ba},{mk},{me},{rs},{tr},{ua},{by},{md},{ru},{am},{az},{ge},{kz},{kg},{tj},{tm},{uz},{mn},{cn},{jp},{kr},{tw},{hk},{mo},{sg},{th},{my},{id},{ph},{vn},{au},{nz},{fj},{pg},{sb},{vu},{nc},{pf},{gu},{mp},{as},{ck},{nu},{nf},{nr},{tv},{ki},{mh},{fm},{pw},{ws},{to},{wf},{tk},{cc},{cx},{hm},{aq},{bv},{gs},{hm},{tf},{sj},{ax},{fo},{gg},{im},{je},{gi},{pt},{es},{pt},{es},{pt},{es}
-          StrictNodes 0
-        owner: debian-tor
-        group: debian-tor
+          version: '3.8'
+          services:
+            torproxy:
+              image: {{ docker_image }}
+              container_name: tor-proxy
+              ports:
+                - "{{ socks_port }}:9050"
+                - "{{ http_proxy_port }}:8118"
+              environment:
+                - TOR_NewCircuitPeriod={{ tor_new_circuit }}
+                - TOR_MaxCircuitDirtiness={{ tor_max_dirtiness }}
+              restart: unless-stopped
+              # Use host networking for better performance
+              network_mode: host
+        owner: root
+        group: root
         mode: '0644'
 
-    - name: Configure privoxy
-      copy:
-        dest: /etc/privoxy/config
-        content: |
-          listen-address 0.0.0.0:{{ http_proxy_port }}
-          forward-socks5t / 127.0.0.1:{{ socks_port }} .
-          logfile /var/log/privoxy/logfile
-          actionsfile default.action
-          filterfile default.filter
-          debug 1
-          toggle 1
-        owner: privoxy
-        group: privoxy
-        mode: '0644'
-
-    - name: Fix privoxy file permissions
-      file:
-        path: "{{ item }}"
-        owner: privoxy
-        group: privoxy
-        mode: '0644'
-      loop:
-        - /etc/privoxy/default.action
-        - /etc/privoxy/default.filter
-        - /etc/privoxy/user.action
-        - /etc/privoxy/user.filter
-        - /etc/privoxy/regression-tests.action
-
-    - name: Remove existing privoxy pid file if it exists
-      file:
-        path: /run/privoxy.pid
-        state: absent
+    - name: Stop and remove existing container if running
+      shell: |
+        docker stop tor-proxy || true
+        docker rm tor-proxy || true
       ignore_errors: true
 
-    - name: Ensure privoxy user can write to run directory
-      file:
-        path: /run/privoxy
-        state: directory
-        owner: privoxy
-        group: privoxy
-        mode: '0755'
+    - name: Pull latest torproxy image
+      docker_image:
+        name: "{{ docker_image }}"
+        source: pull
+
+    - name: Start tor-proxy container
+      docker_container:
+        name: tor-proxy
+        image: "{{ docker_image }}"
+        ports:
+          - "{{ socks_port }}:9050"
+          - "{{ http_proxy_port }}:8118"
+        env:
+          TOR_NewCircuitPeriod: "{{ tor_new_circuit }}"
+          TOR_MaxCircuitDirtiness: "{{ tor_max_dirtiness }}"
+        restart_policy: unless-stopped
+        network_mode: host
+        state: started
+        recreate: yes
 
     - name: Open firewall ports (22, socks, http_proxy)
       ufw:
@@ -427,66 +401,53 @@
         - "{{ socks_port }}"
         - "{{ http_proxy_port }}"
 
-    - name: Ensure services are enabled and running
-      systemd:
-        name: "{{ item }}"
-        enabled: yes
-        state: started
-      loop:
-        - tor@default
-        - privoxy
-
-    - name: Restart services to apply configuration changes
-      systemd:
-        name: "{{ item }}"
-        state: restarted
-        daemon_reload: yes
-      loop:
-        - tor@default
-        - privoxy
-
-    - name: Wait for services to fully start
+    - name: Wait for container to fully start
       pause:
-        seconds: 5
+        seconds: 15
 
-    - name: Verify Tor is listening on correct interface
+    - name: Verify Tor SOCKS5 is listening
       shell: |
-        ss -tlnp | grep ":{{ socks_port }}" | grep "0.0.0.0"
+        ss -tlnp | grep ":{{ socks_port }}" | grep "LISTEN"
       register: tor_listen_check
       failed_when: tor_listen_check.rc != 0
       changed_when: false
 
-    - name: Verify Privoxy is listening on correct interface
+    - name: Verify Privoxy HTTP proxy is listening
       shell: |
-        ss -tlnp | grep ":{{ http_proxy_port }}" | grep "0.0.0.0"
+        ss -tlnp | grep ":{{ http_proxy_port }}" | grep "LISTEN"
       register: privoxy_listen_check
       failed_when: privoxy_listen_check.rc != 0
       changed_when: false
 
-    - name: Health check - socks5 to torproject (optional)
+    - name: Health check - test SOCKS5 connectivity
       shell: |
-        curl -sS --socks5 127.0.0.1:{{ socks_port }} --connect-timeout 10 https://check.torproject.org | head -n1
+        timeout 10 curl -sS --socks5 127.0.0.1:{{ socks_port }} https://check.torproject.org | head -n1 || echo "Connection timeout"
       register: socks_check
       changed_when: false
       failed_when: false
-      when: "'curl' in ansible_facts.packages"
 
-    - name: Health check - http proxy to example.com (optional)
+    - name: Health check - test HTTP proxy connectivity
       shell: |
-        curl -sS -x http://127.0.0.1:{{ http_proxy_port }} --connect-timeout 10 https://example.com | head -n1
+        timeout 10 curl -sS -x http://127.0.0.1:{{ http_proxy_port }} https://example.com | head -n1 || echo "Connection timeout"
       register: http_check
       changed_when: false
       failed_when: false
-      when: "'curl' in ansible_facts.packages"
 
-    - name: Show health checks
+    - name: Show health checks and container status
       debug:
         msg: |
-          Socks5 check (first line): {{ socks_check.stdout | default('n/a') }}
-          HTTP proxy check (first line): {{ http_check.stdout | default('n/a') }}
+          Tor SOCKS5 listening: {{ tor_listen_check.stdout | default('n/a') }}
+          Privoxy HTTP proxy listening: {{ privoxy_listen_check.stdout | default('n/a') }}
+          SOCKS5 health check: {{ socks_check.stdout | default('n/a') }}
+          HTTP proxy health check: {{ http_check.stdout | default('n/a') }}
 
-  handlers:
-    - name: reload systemd
-      systemd:
-        daemon_reload: yes
+    - name: Show running containers
+      shell: |
+        docker ps | grep tor-proxy || echo "No tor-proxy container found"
+      register: docker_status
+      changed_when: false
+
+    - name: Display docker container status
+      debug:
+        msg: "{{ docker_status.stdout | default('n/a') }}"
 
