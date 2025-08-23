@@ -7,11 +7,27 @@
 echo "🧅 Tor-Proxy Service CLI Test"
 echo "=============================="
 
-HOST="tor-proxy.proxmox.local"
+HOST="${HOST:-tor-proxy.proxmox.local}"
+# Resolve target IP to avoid macOS .local mDNS issues; prefer deployment IP file
+TARGET="$HOST"
+DEPLOY_IP_FILE="./deployments/tor-proxy/vm_ip.txt"
+if [ -f "$DEPLOY_IP_FILE" ]; then
+    IP=$(cat "$DEPLOY_IP_FILE" | tr -d '[:space:]')
+    if [[ "$IP" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+        TARGET="$IP"
+    fi
+else
+    # Try resolving via specified DNS server if provided
+    DNS_SERVER="${DNS_SERVER:-192.168.1.11}"
+    RESOLVED=$(nslookup "$HOST" "$DNS_SERVER" 2>/dev/null | awk '/^Address: /{print $2; exit}')
+    if [[ "$RESOLVED" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+        TARGET="$RESOLVED"
+    fi
+fi
 
 # Test 1: SOCKS5 port connectivity
-echo "🔍 Testing SOCKS5 port (9050)..."
-if nc -z -w5 $HOST 9050 2>/dev/null; then
+echo "🔍 Testing SOCKS5 port (9050) on $TARGET..."
+if nc -z -w5 "$TARGET" 9050 2>/dev/null; then
     echo "✅ SOCKS5 port (9050) is accessible"
     SOCKS5_OK=true
 else
@@ -22,8 +38,8 @@ fi
 sleep 1
 
 # Test 2: HTTP proxy port connectivity
-echo "🔍 Testing HTTP proxy port (8118)..."
-if nc -z -w5 $HOST 8118 2>/dev/null; then
+echo "🔍 Testing HTTP proxy port (8118) on $TARGET..."
+if nc -z -w5 "$TARGET" 8118 2>/dev/null; then
     echo "✅ HTTP proxy port (8118) is accessible"
     HTTP_OK=true
 else
@@ -36,13 +52,26 @@ sleep 1
 # Test 3: Tor service (check if it responds to SOCKS5 handshake)
 if [ "$SOCKS5_OK" = true ]; then
     echo "🔍 Testing Tor SOCKS5 handshake..."
-    # Send SOCKS5 handshake and check response
-    if echo -e '\x05\x01\x00' | timeout 10 nc $HOST 9050 | head -c 2 | od -An -v -t x1 | grep -q "05 00"; then
-        echo "✅ Tor SOCKS5 handshake successful"
-        TOR_HANDSHAKE_OK=true
+    # Send SOCKS5 handshake and check response (use gtimeout if available)
+    TIMEOUT_BIN="timeout"
+    command -v timeout >/dev/null 2>&1 || TIMEOUT_BIN="gtimeout"
+    if command -v "$TIMEOUT_BIN" >/dev/null 2>&1; then
+        if printf '\x05\x01\x00' | "$TIMEOUT_BIN" 10 nc "$TARGET" 9050 | head -c 2 | od -An -v -t x1 | tr -s ' ' | sed 's/^ \+//' | grep -q "05 00"; then
+            echo "✅ Tor SOCKS5 handshake successful"
+            TOR_HANDSHAKE_OK=true
+        else
+            echo "⚠️  Tor SOCKS5 handshake failed"
+            TOR_HANDSHAKE_OK=false
+        fi
     else
-        echo "⚠️  Tor SOCKS5 handshake failed"
-        TOR_HANDSHAKE_OK=false
+        # Fallback without timeout
+        if printf '\x05\x01\x00' | nc "$TARGET" 9050 | head -c 2 | od -An -v -t x1 | tr -s ' ' | sed 's/^ \+//' | grep -q "05 00"; then
+            echo "✅ Tor SOCKS5 handshake successful"
+            TOR_HANDSHAKE_OK=true
+        else
+            echo "⚠️  Tor SOCKS5 handshake failed"
+            TOR_HANDSHAKE_OK=false
+        fi
     fi
 else
     TOR_HANDSHAKE_OK=false
@@ -53,7 +82,7 @@ sleep 1
 # Test 4: HTTP proxy functionality (if curl is available)
 if [ "$HTTP_OK" = true ] && command -v curl >/dev/null 2>&1; then
     echo "🔍 Testing HTTP proxy functionality..."
-    if curl -s --proxy http://$HOST:8118 --max-time 10 http://httpbin.org/ip >/dev/null 2>&1; then
+    if curl -s --proxy http://$TARGET:8118 --max-time 10 http://httpbin.org/ip >/dev/null 2>&1; then
         echo "✅ HTTP proxy working"
         HTTP_FUNC_OK=true
     else

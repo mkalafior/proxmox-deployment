@@ -1,0 +1,34 @@
+---
+# Iteration tasks for IP discovery with progressive backoff
+- name: Pause before IP discovery ({{ wait_seconds }}s)
+  pause:
+    seconds: "{{ wait_seconds }}"
+  when: (container_ip | default('')) == ''
+
+- name: Get container network interfaces via Proxmox API
+  uri:
+    url: "https://{{ proxmox_host }}:8006/api2/json/nodes/{{ proxmox_node }}/lxc/{{ vm_id }}/interfaces"
+    method: GET
+    headers:
+      Authorization: "PVEAPIToken={{ proxmox_token_id }}={{ proxmox_token_secret }}"
+    validate_certs: "{{ proxmox_api_validate_certs }}"
+    timeout: 30
+    return_content: yes
+    status_code: [200, 401, 403, 500]
+  register: container_interfaces_result
+  failed_when: false
+  when: (container_ip | default('')) == '' and (proxmox_token_id != '' and proxmox_token_secret != '')
+
+- name: Set container IP from interfaces if available
+  set_fact:
+    container_ip: "{{ (eth0_interface.inet | default('')) | regex_replace('/.*$', '') }}"
+  vars:
+    eth0_interface: "{{ container_interfaces_result.json.data | selectattr('name', 'equalto', 'eth0') | first }}"
+  when:
+    - (container_ip | default('')) == ''
+    - container_interfaces_result is defined
+    - container_interfaces_result.json is defined
+    - container_interfaces_result.json.data is defined
+    - (container_interfaces_result.json.data | selectattr('name','equalto','eth0') | list | length) > 0
+
+
