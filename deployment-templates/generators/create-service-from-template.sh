@@ -36,12 +36,11 @@ create_service_from_template() {
     shift 3
     
     # Parse additional variables (key=value pairs)
-    declare -A template_vars
-    template_vars["service_name"]="$service_name"
+    local template_vars_list=("service_name=$service_name")
     
     while [[ $# -gt 0 ]]; do
         if [[ "$1" =~ ^([^=]+)=(.*)$ ]]; then
-            template_vars["${BASH_REMATCH[1]}"]="${BASH_REMATCH[2]}"
+            template_vars_list+=("$1")
         fi
         shift
     done
@@ -78,19 +77,34 @@ create_service_from_template() {
             mkdir -p "$output_dir"
         fi
         
-        # Process template with variable substitution
-        local template_content
-        template_content="$(cat "$template_file")"
-        
-        # Replace template variables
-        for var_name in "${!template_vars[@]}"; do
-            local var_value="${template_vars[$var_name]}"
-            # Use sed to replace {{ var_name }} with value
-            template_content="$(echo "$template_content" | sed "s|{{ $var_name }}|$var_value|g")"
+        # Process template using j2cli for proper Jinja2 processing
+        # Create a temporary JSON file with variables
+        local temp_vars_file="$(mktemp)"
+        echo "{" > "$temp_vars_file"
+        local first=true
+        for var_pair in "${template_vars_list[@]}"; do
+            if [[ "$var_pair" =~ ^([^=]+)=(.*)$ ]]; then
+                local var_name="${BASH_REMATCH[1]}"
+                local var_value="${BASH_REMATCH[2]}"
+                if [[ "$first" == "true" ]]; then
+                    first=false
+                else
+                    echo "," >> "$temp_vars_file"
+                fi
+                echo "  \"$var_name\": \"$var_value\"" >> "$temp_vars_file"
+            fi
         done
+        echo "}" >> "$temp_vars_file"
         
-        # Write processed content to output file
-        echo "$template_content" > "$output_file"
+        # Process template with j2cli
+        if ! j2 "$template_file" "$temp_vars_file" -f json -o "$output_file"; then
+            log_error "Failed to process template: $template_file"
+            rm -f "$temp_vars_file"
+            return 1
+        fi
+        
+        # Clean up temp file
+        rm -f "$temp_vars_file"
         
         ((template_count++))
     done < <(find "$service_starter_dir" -name "*.j2" -type f -print0)
