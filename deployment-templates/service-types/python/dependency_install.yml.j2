@@ -6,12 +6,36 @@
     creates: "{{ app_dir }}/venv"
   become_user: "{{ app_user }}"
 
+- name: Upgrade pip in virtual environment
+  shell: |
+    if [ -f "./venv/bin/python3" ]; then
+      PYTHON_BIN="./venv/bin/python3"
+    elif [ -f "./venv/bin/python" ]; then
+      PYTHON_BIN="./venv/bin/python"
+    else
+      echo "No Python executable found in virtual environment"
+      exit 1
+    fi
+    $PYTHON_BIN -m pip install --upgrade pip
+  args:
+    chdir: "{{ app_dir }}"
+    executable: /bin/bash
+  become_user: "{{ app_user }}"
+
 - name: Install Python dependencies (if requirements.txt exists)
   shell: |
-    source venv/bin/activate
+    if [ -f "./venv/bin/python3" ]; then
+      PYTHON_BIN="./venv/bin/python3"
+    elif [ -f "./venv/bin/python" ]; then
+      PYTHON_BIN="./venv/bin/python"
+    else
+      echo "No Python executable found in virtual environment"
+      exit 1
+    fi
     if [ -f requirements.txt ]; then
-      pip install -r requirements.txt
+      $PYTHON_BIN -m pip install -r requirements.txt
     fi
   args:
     chdir: "{{ app_dir }}"
+    executable: /bin/bash
   become_user: "{{ app_user }}"

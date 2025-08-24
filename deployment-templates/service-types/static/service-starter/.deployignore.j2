@@ -1,0 +1,109 @@
+# .deployignore for Static Site services
+# This file controls which files are excluded during deployment
+
+# Build tools and dependencies
+node_modules
+.npm
+.yarn
+package-lock.json
+yarn.lock
+
+# Build outputs (keep only final dist/build)
+src
+.cache
+.parcel-cache
+.next
+.nuxt
+.output
+
+# Environment files
+.env*
+!.env.example
+
+# Version control
+.git
+.gitignore
+
+# IDE and editor files
+.vscode
+.idea
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs
+
+# Temporary files
+*.tmp
+*.temp
+
+# Deployment related
+deployment
+deployments
+deploy.sh
+deploy.yml
+Dockerfile*
+docker-compose*
+
+# Development files
+webpack.config.js
+rollup.config.js
+vite.config.js
+gulpfile.js
+Gruntfile.js
+.babelrc
+.eslintrc*
+.prettierrc*
+tsconfig.json
+jsconfig.json
+
+# Test files
+test
+tests
+__tests__
+*.test.js
+*.test.ts
+*.spec.js
+*.spec.ts
+jest.config.*
+cypress
+
+# Documentation source (optional - remove if you want to include docs)
+docs
+README.md
+CHANGELOG.md
+LICENSE
+
+# Source maps (optional - remove if you want to include them)
+*.map
+
+# SASS/SCSS cache
+.sass-cache
+
+# PostCSS
+.postcssrc*
+
+# Stylelint
+.stylelintrc*
+
+# Editor directories and files
+.vscode
+.idea
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db

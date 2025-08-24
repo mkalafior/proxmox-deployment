@@ -1,0 +1,72 @@
+# .deployignore - Exclude patterns for deployment
+# This file works similarly to .gitignore
+# Lines starting with # are comments
+# Empty lines are ignored
+
+# Version control
+.git
+.gitignore
+
+# Dependencies
+node_modules
+__pycache__
+*.pyc
+venv
+env
+.venv
+
+# Build artifacts
+dist
+build
+target
+*.o
+*.so
+*.dll
+
+# Logs
+*.log
+logs
+
+# Environment files
+.env
+.env.local
+.env.development
+.env.test
+.env.production
+
+# IDE files
+.vscode
+.idea
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Deployment related
+deployment
+deployments
+deploy.sh
+deploy.yml
+
+# Test files
+test
+tests
+__tests__
+*.test.js
+*.test.py
+*.spec.js
+*.spec.py
+
+# Documentation (optional)
+docs
+README.md
+*.md
+
+# Temporary files
+tmp
+temp
+*.tmp
+*.temp

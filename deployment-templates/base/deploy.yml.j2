@@ -330,13 +330,27 @@
         - name: Create tar archive of application
           shell: |
             cd {{ local_app_path }}
-            tar --exclude='node_modules' \
-                --exclude='.git' \
-                --exclude='deployment' \
-                --exclude='deployments' \
-                --exclude='*.log' \
-                --exclude='.env' \
-                -czf /tmp/{{ service_name }}-app.tar.gz .
+            # Check if .deployignore exists and build exclude options
+            EXCLUDE_OPTS=""
+            if [ -f .deployignore ]; then
+              # Read .deployignore and convert to tar exclude options
+              while IFS= read -r line || [ -n "$line" ]; do
+                # Skip empty lines and comments
+                if [[ -n "$line" && ! "$line" =~ ^[[:space:]]*# ]]; then
+                  # Remove leading/trailing whitespace
+                  line=$(echo "$line" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+                  if [[ -n "$line" ]]; then
+                    EXCLUDE_OPTS="$EXCLUDE_OPTS --exclude='$line'"
+                  fi
+                fi
+              done < .deployignore
+            else
+              # Default exclusions if no .deployignore file
+              EXCLUDE_OPTS="--exclude='node_modules' --exclude='.git' --exclude='deployment' --exclude='deployments' --exclude='*.log' --exclude='.env'"
+            fi
+            
+            # Create tar with dynamic exclusions
+            eval "tar $EXCLUDE_OPTS -czf /tmp/{{ service_name }}-app.tar.gz ."
           delegate_to: localhost
           become: false
 

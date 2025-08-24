@@ -229,6 +229,85 @@ pxdcli restart python-api
 pxdcli cleanup python-api
 ```
 
+## 📁 File Exclusion with .deployignore
+
+The deployment system supports a `.deployignore` file that works similarly to `.gitignore` to control which files are excluded from deployment.
+
+### How it works
+- Place a `.deployignore` file in your service root directory (same level as your application code)
+- List patterns of files/directories to exclude, one per line
+- Supports comments (lines starting with `#`) and empty lines
+- If no `.deployignore` file exists, default exclusions are used
+
+### Default Exclusions (when no .deployignore file exists)
+```
+node_modules
+.git
+deployment
+deployments
+*.log
+.env
+```
+
+### Example .deployignore file
+```bash
+# Version control
+.git
+.gitignore
+
+# Dependencies
+node_modules
+__pycache__
+*.pyc
+venv
+
+# Build artifacts
+dist
+build
+target
+
+# Logs and temporary files
+*.log
+*.tmp
+logs
+
+# Environment files
+.env*
+
+# IDE files
+.vscode
+.idea
+*.swp
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Test files
+test
+tests
+*.test.js
+*.spec.py
+
+# Documentation (optional)
+docs
+README.md
+```
+
+### Usage
+1. Create a `.deployignore` file in your service directory:
+   ```bash
+   cd services/my-service
+   cp ../../.deployignore.example .deployignore
+   ```
+
+2. Customize the patterns for your specific needs
+
+3. Deploy as usual - the exclusions will be automatically applied:
+   ```bash
+   pxdcli deploy my-service
+   ```
+
 ## 🔧 Configuration
 
 ### Global Configuration

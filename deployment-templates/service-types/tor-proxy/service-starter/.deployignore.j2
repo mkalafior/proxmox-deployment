@@ -1,0 +1,64 @@
+# .deployignore for Tor-Proxy services
+# This file controls which files are excluded during deployment
+# Note: Tor-Proxy services typically don't have application source code
+
+# Version control
+.git
+.gitignore
+
+# Environment files
+.env*
+!.env.example
+
+# IDE and editor files
+.vscode
+.idea
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs
+
+# Temporary files
+*.tmp
+*.temp
+
+# Deployment related
+deployment
+deployments
+deploy.sh
+deploy.yml
+Dockerfile*
+docker-compose*
+
+# Tor-specific files
+tor_data
+hidden_service
+keys
+state
+
+# Privoxy files
+privoxy.conf.backup
+
+# Documentation (optional - remove if you want to include docs)
+docs
+README.md
+CHANGELOG.md
+LICENSE
+
+# Configuration backups
+*.conf.backup
+*.conf.old
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db

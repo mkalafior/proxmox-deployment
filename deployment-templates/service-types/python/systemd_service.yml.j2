@@ -7,7 +7,7 @@ Type=simple
 User={{ app_user }}
 Group={{ app_user }}
 WorkingDirectory={{ app_dir }}
-ExecStart={{ app_dir }}/venv/bin/python {{ app_main_file | default('main.py') }}
+ExecStart=/bin/bash -c 'cd {{ app_dir }} && if [ -f ./venv/bin/python ]; then ./venv/bin/python {{ app_main_file | default("app.py") }}; else ./venv/bin/python3 {{ app_main_file | default("app.py") }}; fi'
 Restart=always
 RestartSec=10
 Environment=PYTHONPATH={{ app_dir }}
