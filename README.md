@@ -1,6 +1,6 @@
 # Proxmox Multi-Service Deployment System
 
-A DRY and KISS approach to deploying multiple services to Proxmox VE with automated VM provisioning, service management, and optional Cloudflare tunnel exposure.
+A DRY and KISS approach to deploying multiple services to Proxmox VE with automated VM provisioning, template-based service generation, and comprehensive service management.
 
 ## 🏗️ Architecture
 
@@ -20,8 +20,11 @@ proxmox-deploy-playground/
 │   └── service02/              # Bun deployment
 ├── deployment-templates/       # Shared templates (DRY principle)
 │   ├── base/                   # Base Ansible templates
-│   ├── service-types/          # Language-specific configs
-│   └── generators/             # Generation scripts
+│   ├── service-types/          # Language-specific configs & starter templates
+│   │   ├── nodejs/service-starter/  # Node.js starter templates
+│   │   ├── python/service-starter/  # Python starter templates
+│   │   └── golang/service-starter/  # Go starter templates
+│   └── generators/             # Template-based generation scripts
 ├── global-config/              # Global configuration
 │   ├── env.proxmox.global      # Global Proxmox settings
 │   └── deployment-defaults.yml # Default values
@@ -31,24 +34,34 @@ proxmox-deploy-playground/
 ## 🚀 Supported Service Types
 
 ### Programming Languages
-- **Node.js/Bun.js** - REST APIs, GraphQL, real-time apps
-- **Python** - FastAPI, Flask, Django applications  
-- **Go** - High-performance compiled services
-- **Rust** - Systems programming (template ready)
+- **Node.js/Bun.js** - REST APIs, GraphQL, real-time apps with runtime-specific templates
+- **Python** - FastAPI applications with dependency management
+- **Go** - High-performance compiled services with module support
+- **Static Sites** - Nginx-served websites and SPAs
 
 ### Infrastructure Services
 - **PostgreSQL** - ACID database with user setup
 - **MySQL** - Traditional relational database
 - **Redis** - In-memory cache/store
 - **MongoDB** - Document database
-- **Static Sites** - Nginx-served websites
+- **Tor Proxy** - Privacy-focused proxy services
+
+### Template-Based Service Generation
+All service types use Jinja2 templates for consistent, maintainable code generation:
+- **Runtime-specific configurations** (Node.js vs Bun, Python versions)
+- **Proper error handling** and HTTP status codes
+- **Health check endpoints** and service metadata
+- **Environment-based configuration** (PORT, HOST variables)
+- **CORS headers** and security best practices
 
 ## 🔧 Installation (Linux/macOS)
 
 Install the global templates and CLI once, then use them from any project without copying files.
 
 ### Prerequisites
-- git, bash
+- git, bash, curl
+- j2cli (Jinja2 command-line tool) - automatically installed during setup
+- Ansible (for deployment) - automatically installed during setup
 
 ### Linux
 ```bash
@@ -81,6 +94,7 @@ pxdcli help
 Notes
 - The installer places templates in `~/.proxmox-deploy/templates` and symlinks the CLI to `~/.local/bin/pxdcli`.
 - The CLI auto-updates templates (`git pull`) on use.
+- Service generation uses template-based creation with Jinja2 processing for consistent, high-quality code.
 - To target a different project directory: run commands from that project root. Advanced: set `PROJECT_ROOT_OVERRIDE=/abs/path`.
 - Advanced: point to a custom templates checkout by exporting `TEMPLATES_ROOT=/abs/path/to/templates-root`.
 
@@ -134,13 +148,16 @@ Advanced:
 # Interactive generation (recommended - auto-selects node and VM ID)
 pxdcli generate api-service
 
-# Direct command with auto VM ID selection
-pxdcli generate api-service --type nodejs --runtime bun --port 3001
+# Direct command with auto VM ID selection and template-based service creation
+pxdcli generate api-service --type nodejs --runtime node --port 3001
 
-# Specify node manually (auto VM ID selection)
+# Bun.js runtime with template-based generation
+pxdcli generate bun-service --type nodejs --runtime bun --port 3002
+
+# Python service with FastAPI template
 pxdcli generate python-api --type python --port 8000 --node pve2
 
-# Full manual control
+# Full manual control with database setup
 pxdcli generate postgres-db --type database --runtime postgresql \
   --node pve1 --vm-id 204 --port 5432 --db-name myapp --db-user myuser --db-pass secret123
 ```
@@ -346,13 +363,23 @@ pxdcli generate my-new-service
 # Step 1: Node Selection - Shows available Proxmox nodes, asks for selection
 # Step 2: VM ID Assignment - Auto-finds first available VM ID on selected node
 # Step 3: Service Configuration - Prompts for port, subdomain, service type, etc.
+# Step 4: Template Generation - Creates service code from Jinja2 templates
 ```
 
 ### 2. Develop
 ```bash
 cd services/my-new-service
-# Edit your code
-# Test locally: bun dev, python main.py, go run main.go
+# Service code is already generated from templates with:
+# - Proper error handling and HTTP status codes
+# - Health check endpoints (/health)
+# - Environment-based configuration
+# - Runtime-specific optimizations
+
+# Test locally: 
+npm start          # Node.js services
+bun run start      # Bun.js services  
+python main.py     # Python services
+go run main.go     # Go services
 ```
 
 ### 3. Deploy
@@ -377,11 +404,19 @@ pxdcli generate main-db
 pxdcli generate redis-cache
 pxdcli generate web-frontend
 
-# Or use direct commands with auto-selection
+# Or use direct commands with template-based service creation
 pxdcli generate api-gateway --type nodejs --runtime bun --port 3000 --node pve
+# Generates: Bun.js server with health checks, CORS, proper error handling
+
+pxdcli generate user-service --type nodejs --runtime node --port 3001 --node pve
+# Generates: Node.js HTTP server with URL parsing, JSON responses
 
 pxdcli generate main-db --type database --runtime postgresql \
   --port 5432 --db-name ecommerce --node pve
+# Generates: PostgreSQL with user setup and database initialization
+
+pxdcli generate web-frontend --type static --port 80 --node pve
+# Generates: Nginx-served static site with proper configuration
 
 # Deploy all services
 pxdcli deploy
@@ -492,9 +527,11 @@ pxdcli update --file deploy.yml.j2
 ## 📚 Advanced Topics
 
 ### Adding New Service Types
-1. Create config in `deployment-templates/service-types/newlang/`
-2. Define runtime installation, dependencies, systemd service
-3. Test with generator script
+1. Create service type directory: `deployment-templates/service-types/newlang/`
+2. Add deployment configuration files (config.yml, runtime_install.yml.j2, etc.)
+3. Create starter templates: `deployment-templates/service-types/newlang/service-starter/`
+4. Add Jinja2 templates for service files (main.ext.j2, package.json.j2, etc.)
+5. Test with generator script using template-based creation
 
 ### Custom Environment Variables
 Add to service config:
@@ -520,6 +557,11 @@ service_dependencies:
 
 ---
 
-## 🎉 You now have a production-ready, multi-language, scalable deployment system!
+## 🎉 You now have a production-ready, template-based, multi-language deployment system!
 
-From simple single-service deployments to complex polyglot microservices architectures - all with consistent, DRY, and KISS principles.
+From simple single-service deployments to complex polyglot microservices architectures - all with:
+- **Template-based service generation** using Jinja2 for consistent, high-quality code
+- **Runtime-specific optimizations** (Node.js vs Bun, Python versions, etc.)
+- **Built-in best practices** (health checks, error handling, CORS, environment configuration)
+- **DRY and KISS principles** with centralized templates and simple management
+- **Production-ready code** generated from the start with proper HTTP handling and logging
