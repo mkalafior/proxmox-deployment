@@ -20,6 +20,34 @@
         fail_msg: |
           Required Proxmox authentication must be configured.
 
+    - name: Attempt DNS cleanup via systemd stop inside container (best-effort)
+      shell: |
+        /usr/sbin/pct exec {{ vm_id }} -- systemctl stop dns-register || true
+      delegate_to: "{{ proxmox_host }}"
+      environment:
+        PATH: "/usr/sbin:/usr/bin:/bin:/sbin"
+      register: dns_stop_result
+      failed_when: false
+      changed_when: false
+
+    - name: Attempt DNS cleanup via script inside container (best-effort)
+      shell: |
+        /usr/sbin/pct exec {{ vm_id }} -- sh -lc "/opt/dns-register.sh cleanup || true"
+      delegate_to: "{{ proxmox_host }}"
+      environment:
+        PATH: "/usr/sbin:/usr/bin:/bin:/sbin"
+      register: dns_cleanup_result
+      failed_when: false
+      changed_when: false
+
+    - name: Debug DNS cleanup results
+      debug:
+        msg: |
+          DNS cleanup attempted for {{ service_name }} (VM {{ vm_id }})
+          - systemd stop rc: {{ dns_stop_result.rc | default('n/a') }}
+          - script cleanup rc: {{ dns_cleanup_result.rc | default('n/a') }}
+      when: dns_stop_result is defined or dns_cleanup_result is defined
+
     - name: Try to stop the container (idempotent)
       uri:
         url: "https://{{ proxmox_host }}:8006/api2/json/nodes/{{ proxmox_node }}/lxc/{{ vm_id }}/status/stop"
