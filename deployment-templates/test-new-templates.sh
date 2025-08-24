@@ -19,6 +19,7 @@ for service_type in "${SERVICE_TYPES[@]}"; do
     test_service="test-${service_type}-$(date +%s)"
 
     if ./generators/generate-service-deployment.sh "$test_service" \
+        --service-type "$service_type" \
         --port $((3000 + RANDOM % 1000)) \
         --force; then
         echo "✅ $service_type template generation successful"

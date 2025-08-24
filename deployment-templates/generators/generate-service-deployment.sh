@@ -186,6 +186,7 @@ show_help() {
     echo "  service-name    Name of the service to generate deployment for"
     echo ""
     echo "Options:"
+    echo "  --service-type TYPE  Service type: nodejs, python, database, tor-proxy (default: nodejs)"
     echo "  --port PORT     Application port (required)"
     echo "  --node NODE     Proxmox node (optional, will prompt for selection)"
     echo "  --vm-id ID      VM ID for Proxmox (optional, will auto-select first available)"
@@ -206,6 +207,7 @@ show_help() {
 
 # Parse command line arguments
 SERVICE_NAME=""
+SERVICE_TYPE=""
 VM_ID=""
 APP_PORT=""
 PROXMOX_NODE=""
@@ -219,6 +221,10 @@ FORCE_OVERWRITE=false
 
 while [[ $# -gt 0 ]]; do
     case $1 in
+        --service-type)
+            SERVICE_TYPE="$2"
+            shift 2
+            ;;
         --vm-id)
             VM_ID="$2"
             shift 2
@@ -451,8 +457,8 @@ APP_DIR="/opt/$SERVICE_NAME"
 APP_SERVICE_NAME="$SERVICE_NAME"
 LOCAL_APP_PATH="../../services/$SERVICE_NAME"
 
-# Set default service type if not specified
-SERVICE_TYPE_CFG="${SERVICE_TYPE_CFG:-nodejs}"
+# Set service type from command line or default to nodejs
+SERVICE_TYPE_CFG="${SERVICE_TYPE:-nodejs}"
 
 # Create service configuration file (preserve existing if present)
 if [[ -f "$DEPLOYMENT_DIR/service-config.yml" ]]; then

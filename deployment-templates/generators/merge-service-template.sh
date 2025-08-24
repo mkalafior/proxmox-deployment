@@ -41,41 +41,37 @@ merge_service_template() {
     local service_parts_dir="$temp_dir/service-parts"
     mkdir -p "$service_parts_dir"
 
-    # Copy base template
-    cp "$TEMPLATES_BASE/base/deploy.yml.j2" "$temp_dir/deploy.yml.j2"
-
-    # Copy service-specific parts if they exist
+    # Use Python script to merge templates
+    local base_template="$TEMPLATES_BASE/base/deploy.yml.j2"
     local service_type_dir="$TEMPLATES_BASE/service-types/$service_type"
+    local merge_script="$SCRIPT_DIR/merge_templates.py"
     local has_runtime_install=false
     local has_dependency_install=false
     local has_build_tasks=false
     local has_systemd_service=false
 
+    # Check which service parts exist
     if [[ -d "$service_type_dir" ]]; then
-        if [[ -f "$service_type_dir/runtime_install.yml.j2" ]]; then
-            cp "$service_type_dir/runtime_install.yml.j2" "$service_parts_dir/"
-            has_runtime_install=true
-            log_info "  ✓ Including runtime installation tasks"
-        fi
+        [[ -f "$service_type_dir/runtime_install.yml.j2" ]] && has_runtime_install=true
+        [[ -f "$service_type_dir/dependency_install.yml.j2" ]] && has_dependency_install=true
+        [[ -f "$service_type_dir/build_tasks.yml.j2" ]] && has_build_tasks=true
+        [[ -f "$service_type_dir/systemd_service.yml.j2" ]] && has_systemd_service=true
+    fi
 
-        if [[ -f "$service_type_dir/dependency_install.yml.j2" ]]; then
-            cp "$service_type_dir/dependency_install.yml.j2" "$service_parts_dir/"
-            has_dependency_install=true
-            log_info "  ✓ Including dependency installation tasks"
-        fi
+    # Use Python script to merge the templates
+    if python3 "$merge_script" "$base_template" "$service_type_dir" "$temp_dir/deploy.yml.j2" "$service_name"; then
+        log_info "✅ Templates merged successfully"
+    else
+        log_error "Failed to merge templates using Python script"
+        rm -rf "$temp_dir"
+        return 1
+    fi
 
-        if [[ -f "$service_type_dir/build_tasks.yml.j2" ]]; then
-            cp "$service_type_dir/build_tasks.yml.j2" "$service_parts_dir/"
-            has_build_tasks=true
-            log_info "  ✓ Including build tasks"
-        fi
-
-        if [[ -f "$service_type_dir/systemd_service.yml.j2" ]]; then
-            mkdir -p "$deployment_dir/templates"
-            cp "$service_type_dir/systemd_service.yml.j2" "$deployment_dir/templates/${service_name}.service.j2"
-            has_systemd_service=true
-            log_info "  ✓ Including custom systemd service template"
-        fi
+    # Handle systemd service template separately
+    if [[ "$has_systemd_service" == "true" ]]; then
+        mkdir -p "$deployment_dir/templates"
+        cp "$service_type_dir/systemd_service.yml.j2" "$deployment_dir/templates/${service_name}.service.j2"
+        log_info "  ✓ Including custom systemd service template"
     fi
 
     # Create template variables for conditional includes
@@ -89,99 +85,13 @@ service_build_tasks: $has_build_tasks
 service_systemd_service: $has_systemd_service
 EOF
 
-    # Use ansible to render the merged template
-    log_step "Rendering merged template..."
-
-    # Create a simple ansible playbook to render the template
-    cat > "$temp_dir/render.yml" << 'EOF'
----
-- name: Render service template
-  hosts: localhost
-  connection: local
-  gather_facts: true
-  tasks:
-    - name: Render template
-      template:
-        src: deploy.yml.j2
-        dest: "{{ output_file }}"
-      vars:
-        output_file: "{{ deployment_output }}"
-EOF
-
-    # Create extra vars file for ansible
-    cat > "$temp_dir/extra_vars.yml" << EOF
----
-ansible_python_interpreter: $(which python3)
-ssh_public_key_content:
-  content: "dGVzdA=="
-container_ip: "192.168.1.100"
-
-# Default template variables
-vm_id: "100"
-vm_name: "test-container"
-vm_memory: "2048"
-vm_cores: "2"
-vm_disk_size: "20"
-vm_storage: "local-lvm"
-vm_network_bridge: "vmbr0"
-vm_swap: "512"
-vm_unprivileged: true
-app_port: "3000"
-app_user: "appuser"
-app_dir: "/opt/$service_name"
-app_service_name: "$service_name"
-service_type: "$service_type"
-service_name: "$service_name"
-local_app_path: "/tmp"
-allowed_ports:
-  - "3000"
-  - "22"
-
-# Proxmox variables
-proxmox_host: "localhost"
-proxmox_node: "pve"
-proxmox_token_id: ""
-proxmox_token_secret: ""
-proxmox_user: ""
-proxmox_password: ""
-vm_os_template: "ubuntu-22.04-standard_22.04-1_amd64.tar.zst"
-
-# DNS variables
-dns_server: "192.168.1.11"
-dns_domain: "proxmox.local"
-service_hostname: "$service_name"
-
-# SSH variables
-ssh_public_key_path: "~/.ssh/id_rsa.pub"
-
-# Ansible fact variables (needed for templates)
-ansible_date_time:
-  date: "2025-01-01"
-  hour: "12"
-  minute: "00"
-  second: "00"
-
-# Additional template variables
-proxmox_api_validate_certs: false
-http_proxy_port: "8118"
-db_type: "postgresql"
-nodejs_runtime: "bun"
-app_main_file: "index.js"
-http_proxy_port: "8118"
-EOF
-
-    # Run the template rendering
-    extra_vars="-e deployment_output=$deployment_dir/deploy.yml -e @$temp_dir/merge_vars.yml -e @$temp_dir/extra_vars.yml"
-
-    # Add group_vars if it exists
-    if [[ -f "$deployment_dir/group_vars/all.yml" ]]; then
-        extra_vars="$extra_vars -e @$deployment_dir/group_vars/all.yml"
-    fi
-
-    if ansible-playbook "$temp_dir/render.yml" $extra_vars > /dev/null 2>&1; then
+    # Copy the merged template directly to the deployment directory
+    log_step "Copying merged template to deployment directory..."
+    
+    if cp "$temp_dir/deploy.yml.j2" "$deployment_dir/deploy.yml"; then
         log_info "✅ Template merged successfully"
     else
-        log_error "Failed to merge template"
+        log_error "Failed to copy merged template"
         # Cleanup and exit
         rm -rf "$temp_dir"
         return 1
