@@ -479,6 +479,40 @@ create_service_starter() {
 
     log_step "Creating service starter files..."
     
+    # Use template-based service creation for better maintainability
+    local template_args=(
+        "app_port=$APP_PORT"
+    )
+    
+    # Add runtime-specific variables
+    case "$SERVICE_TYPE" in
+        nodejs)
+            template_args+=("nodejs_runtime=$RUNTIME_VARIANT")
+            ;;
+        python)
+            template_args+=("runtime_variant=$RUNTIME_VARIANT")
+            ;;
+        golang)
+            template_args+=("runtime_variant=$RUNTIME_VARIANT")
+            ;;
+        *)
+            template_args+=("runtime_variant=$RUNTIME_VARIANT")
+            ;;
+    esac
+    
+    # Check if template-based service creation is available
+    local create_script="$SCRIPT_DIR/create-service-from-template.sh"
+    if [[ -f "$create_script" ]]; then
+        if "$create_script" "$SERVICE_NAME" "$SERVICE_TYPE" "$SERVICE_DIR" "${template_args[@]}"; then
+            log_info "✅ Created $SERVICE_TYPE service starter files"
+            return 0
+        else
+            log_warn "Template-based creation failed, falling back to legacy method"
+        fi
+    fi
+    
+    # Fallback to legacy hardcoded creation (only for unsupported service types)
+    log_warn "Using legacy service creation - template system not available"
     mkdir -p "$SERVICE_DIR"
     
     case "$SERVICE_TYPE" in
