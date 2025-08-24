@@ -1,0 +1,71 @@
+package main
+
+import (
+	"encoding/json"
+	"fmt"
+	"log"
+	"net/http"
+	"os"
+	"time"
+
+	"github.com/gorilla/mux"
+)
+
+type HealthResponse struct {
+	Status    string `json:"status"`
+	Service   string `json:"service"`
+	Timestamp string `json:"timestamp"`
+}
+
+type HomeResponse struct {
+	Message string `json:"message"`
+	Service string `json:"service"`
+	Port    string `json:"port"`
+}
+
+func healthHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	response := HealthResponse{
+		Status:    "healthy",
+		Service:   "{{ service_name }}",
+		Timestamp: time.Now().Format(time.RFC3339),
+	}
+	json.NewEncoder(w).Encode(response)
+}
+
+func homeHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	port := os.Getenv("PORT")
+	if port == "" {
+		port = "{{ app_port }}"
+	}
+	
+	response := HomeResponse{
+		Message: "Hello from {{ service_name }}!",
+		Service: "{{ service_name }}",
+		Port:    port,
+	}
+	json.NewEncoder(w).Encode(response)
+}
+
+func main() {
+	r := mux.NewRouter()
+	
+	r.HandleFunc("/health", healthHandler).Methods("GET")
+	r.HandleFunc("/", homeHandler).Methods("GET")
+	
+	port := os.Getenv("PORT")
+	if port == "" {
+		port = "{{ app_port }}"
+	}
+	
+	host := os.Getenv("HOST")
+	if host == "" {
+		host = "0.0.0.0"
+	}
+	
+	addr := fmt.Sprintf("%s:%s", host, port)
+	fmt.Printf("🚀 {{ service_name }} running on http://%s\n", addr)
+	
+	log.Fatal(http.ListenAndServe(addr, r))
+}

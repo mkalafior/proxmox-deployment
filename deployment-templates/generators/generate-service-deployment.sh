@@ -385,64 +385,7 @@ if [[ -d "$DEPLOYMENT_DIR" ]] && [[ "$FORCE_OVERWRITE" != "true" ]]; then
     fi
 fi
 
-# Create service directory if it doesn't exist
-if [[ ! -d "$SERVICE_DIR" ]]; then
-    log_step "Creating service directory: $SERVICE_DIR"
-    mkdir -p "$SERVICE_DIR"
-    
-    # Create a basic package.json for the service
-    cat > "$SERVICE_DIR/package.json" << EOF
-{
-  "name": "$SERVICE_NAME",
-  "version": "1.0.0",
-  "description": "Generated service: $SERVICE_NAME",
-  "main": "index.js",
-  "scripts": {
-    "start": "bun run index.js",
-    "dev": "bun run --watch index.js"
-  },
-  "dependencies": {}
-}
-EOF
-
-    # Create a basic index.js
-    cat > "$SERVICE_DIR/index.js" << EOF
-// Generated service: $SERVICE_NAME
-const server = Bun.serve({
-  port: process.env.PORT || $APP_PORT,
-  hostname: process.env.HOST || "0.0.0.0",
-  fetch(req) {
-    const url = new URL(req.url);
-    
-    if (url.pathname === "/health") {
-      return new Response(JSON.stringify({
-        status: "healthy",
-        service: "$SERVICE_NAME",
-        timestamp: new Date().toISOString()
-      }), {
-        headers: { "Content-Type": "application/json" }
-      });
-    }
-    
-    if (url.pathname === "/") {
-      return new Response(JSON.stringify({
-        message: "Hello from $SERVICE_NAME!",
-        service: "$SERVICE_NAME",
-        port: server.port
-      }), {
-        headers: { "Content-Type": "application/json" }
-      });
-    }
-    
-    return new Response("Not Found", { status: 404 });
-  },
-});
-
-console.log(\`🚀 $SERVICE_NAME running on http://\${server.hostname}:\${server.port}\`);
-EOF
-
-    log_info "✅ Created basic service structure in $SERVICE_DIR"
-fi
+# Note: Service directory creation moved to after service-config.yml generation
 
 # Create deployment directory
 log_step "Creating deployment directory: $DEPLOYMENT_DIR"
@@ -522,6 +465,52 @@ EOF
       fi
     fi
   fi
+fi
+
+# Create service directory from template if it doesn't exist
+if [[ ! -d "$SERVICE_DIR" ]]; then
+    log_step "Creating service directory from template: $SERVICE_DIR"
+    
+    # Use template-based service creation
+    local service_type_for_creation="${SERVICE_TYPE:-nodejs}"
+    local runtime_var=""
+    
+    # Get runtime information from the just-created service-config.yml
+    if [[ -f "$DEPLOYMENT_DIR/service-config.yml" ]]; then
+        runtime_var=$(grep -E '^(nodejs_runtime|runtime_variant):' "$DEPLOYMENT_DIR/service-config.yml" | head -n1 | awk -F: '{print $2}' | xargs || echo "")
+    fi
+    
+    # Set default runtime if not specified
+    if [[ -z "$runtime_var" ]]; then
+        case "$service_type_for_creation" in
+            nodejs) runtime_var="bun" ;;
+            python) runtime_var="python3" ;;
+            golang) runtime_var="go" ;;
+            *) runtime_var="" ;;
+        esac
+    fi
+    
+    # Build template variables
+    local template_args=(
+        "app_port=$APP_PORT"
+    )
+    
+    if [[ -n "$runtime_var" ]]; then
+        case "$service_type_for_creation" in
+            nodejs) template_args+=("nodejs_runtime=$runtime_var") ;;
+            *) template_args+=("runtime_variant=$runtime_var") ;;
+        esac
+    fi
+    
+    # Create service from template
+    if "$SCRIPT_DIR/create-service-from-template.sh" "$SERVICE_NAME" "$service_type_for_creation" "$SERVICE_DIR" "${template_args[@]}"; then
+        log_info "✅ Created service structure from $service_type_for_creation template"
+    else
+        log_warn "Failed to create service from template, creating basic structure"
+        mkdir -p "$SERVICE_DIR"
+        echo "# Generated service: $SERVICE_NAME" > "$SERVICE_DIR/README.md"
+        echo "This service was generated but no starter template was available." >> "$SERVICE_DIR/README.md"
+    fi
 fi
 
 # Determine service type from service-config.yml

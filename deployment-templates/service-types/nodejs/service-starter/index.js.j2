@@ -1,0 +1,75 @@
+// Generated service: {{ service_name }}
+{% if nodejs_runtime == "node" %}
+const http = require('http');
+const url = require('url');
+
+const server = http.createServer((req, res) => {
+  const parsedUrl = url.parse(req.url, true);
+  
+  // Set CORS headers
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Content-Type', 'application/json');
+  
+  if (parsedUrl.pathname === '/health') {
+    res.writeHead(200);
+    res.end(JSON.stringify({
+      status: "healthy",
+      service: "{{ service_name }}",
+      timestamp: new Date().toISOString()
+    }));
+    return;
+  }
+  
+  if (parsedUrl.pathname === '/') {
+    res.writeHead(200);
+    res.end(JSON.stringify({
+      message: "Hello from {{ service_name }}!",
+      service: "{{ service_name }}",
+      port: process.env.PORT || {{ app_port }}
+    }));
+    return;
+  }
+  
+  res.writeHead(404);
+  res.end(JSON.stringify({ error: "Not Found" }));
+});
+
+const port = process.env.PORT || {{ app_port }};
+const host = process.env.HOST || "0.0.0.0";
+
+server.listen(port, host, () => {
+  console.log(`🚀 {{ service_name }} running on http://${host}:${port}`);
+});
+{% else %}
+const server = Bun.serve({
+  port: process.env.PORT || {{ app_port }},
+  hostname: process.env.HOST || "0.0.0.0",
+  fetch(req) {
+    const url = new URL(req.url);
+    
+    if (url.pathname === "/health") {
+      return new Response(JSON.stringify({
+        status: "healthy",
+        service: "{{ service_name }}",
+        timestamp: new Date().toISOString()
+      }), {
+        headers: { "Content-Type": "application/json" }
+      });
+    }
+    
+    if (url.pathname === "/") {
+      return new Response(JSON.stringify({
+        message: "Hello from {{ service_name }}!",
+        service: "{{ service_name }}",
+        port: server.port
+      }), {
+        headers: { "Content-Type": "application/json" }
+      });
+    }
+    
+    return new Response("Not Found", { status: 404 });
+  },
+});
+
+console.log(`🚀 {{ service_name }} running on http://${server.hostname}:${server.port}`);
+{% endif %}

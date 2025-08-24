@@ -1,0 +1,16 @@
+{
+  "name": "{{ service_name }}",
+  "version": "1.0.0",
+  "description": "Generated service: {{ service_name }}",
+  "main": "index.js",
+  "scripts": {
+{% if nodejs_runtime == "node" %}
+    "start": "node index.js",
+    "dev": "node --watch index.js"
+{% else %}
+    "start": "bun run index.js",
+    "dev": "bun run --watch index.js"
+{% endif %}
+  },
+  "dependencies": {}
+}
