@@ -74,12 +74,31 @@ def merge_template(base_template_path, service_type_dir, output_path, service_na
             
             # Try to replace the full conditional block first
             if include_info["start_pattern"] in template_content:
-                replacement = f"# SERVICE-SPECIFIC INJECTION POINT: {include_name.replace('_', ' ').title()}\n    {service_content}"
+                # Indent the service content to match the task list indentation (4 spaces)
+                # Remove any trailing whitespace and ensure proper indentation
+                lines = service_content.strip().split('\n')
+                indented_lines = []
+                for line in lines:
+                    if line.strip():  # Only indent non-empty lines
+                        indented_lines.append('    ' + line)
+                    else:
+                        indented_lines.append('')
+                indented_content = '\n'.join(indented_lines)
+                replacement = f"    # SERVICE-SPECIFIC INJECTION POINT: {include_name.replace('_', ' ').title()}\n{indented_content}"
                 template_content = template_content.replace(include_info["start_pattern"], replacement)
                 print(f"  ✓ Included {filename} (with conditional)")
             # Fallback to simple include replacement
             elif include_info["simple_pattern"] in template_content:
-                template_content = template_content.replace(include_info["simple_pattern"], service_content)
+                # Indent the service content to match the task list indentation (4 spaces)
+                lines = service_content.strip().split('\n')
+                indented_lines = []
+                for line in lines:
+                    if line.strip():  # Only indent non-empty lines
+                        indented_lines.append('    ' + line)
+                    else:
+                        indented_lines.append('')
+                indented_content = '\n'.join(indented_lines)
+                template_content = template_content.replace(include_info["simple_pattern"], indented_content)
                 print(f"  ✓ Included {filename} (simple)")
             else:
                 print(f"  - Pattern not found for {filename}")
