@@ -1,0 +1,33 @@
+---
+- name: Restart {{ service_name }} database
+  hosts: proxmox_containers
+  become: true
+  tasks:
+    - name: Normalize db_type
+      set_fact:
+        db_type: "{{ db_type | default(runtime_variant) | default('postgresql') }}"
+
+    - name: Restart PostgreSQL
+      systemd:
+        name: postgresql
+        state: restarted
+      when: db_type == 'postgresql'
+
+    - name: Restart MySQL
+      systemd:
+        name: mysql
+        state: restarted
+      when: db_type == 'mysql'
+
+    - name: Restart Redis
+      systemd:
+        name: redis-server
+        state: restarted
+      when: db_type == 'redis'
+
+    - name: Restart MongoDB
+      systemd:
+        name: mongod
+        state: restarted
+      when: db_type == 'mongodb'
+

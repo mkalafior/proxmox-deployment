@@ -640,11 +640,3 @@
     - name: reload systemd
       systemd:
         daemon_reload: yes
-    - name: restart tor
-      systemd:
-        name: tor
-        state: restarted
-    - name: restart privoxy
-      systemd:
-        name: privoxy
-        state: restarted

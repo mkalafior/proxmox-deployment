@@ -1,0 +1,10 @@
+# Python Build Tasks (typically empty for Python applications)
+# Python applications usually don't require build steps as they are interpreted
+# Any Python-specific compilation or preparation tasks would go here
+
+# Example: If you had Python C extensions to compile, you could add them here
+# - name: Compile Python extensions
+#   shell: python setup.py build_ext --inplace
+#   args:
+#     chdir: "{{ app_dir }}"
+#   become_user: "{{ app_user }}"

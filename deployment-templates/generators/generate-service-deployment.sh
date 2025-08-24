@@ -451,8 +451,8 @@ APP_DIR="/opt/$SERVICE_NAME"
 APP_SERVICE_NAME="$SERVICE_NAME"
 LOCAL_APP_PATH="../../services/$SERVICE_NAME"
 
-# Ensure safe default for service type (used later if provided by caller)
-SERVICE_TYPE_CFG=""
+# Set default service type if not specified
+SERVICE_TYPE_CFG="${SERVICE_TYPE_CFG:-nodejs}"
 
 # Create service configuration file (preserve existing if present)
 if [[ -f "$DEPLOYMENT_DIR/service-config.yml" ]]; then
@@ -518,25 +518,24 @@ EOF
   fi
 fi
 
-# Generate Ansible playbook using sed replacements
-log_step "Generating Ansible playbook..."
-
-# Prefer service-type specific templates if available
+# Determine service type from service-config.yml
 SERVICE_TYPE_CFG=""
 if [[ -f "$DEPLOYMENT_DIR/service-config.yml" ]]; then
     SERVICE_TYPE_CFG=$(grep -E '^service_type:' "$DEPLOYMENT_DIR/service-config.yml" | awk -F: '{print $2}' | xargs || true)
 fi
 TYPE_TEMPLATE_DIR="$TEMPLATES_BASE/service-types/${SERVICE_TYPE_CFG}"
 
-# Choose deploy template
-DEPLOY_TEMPLATE_FILE="$TEMPLATE_DIR/deploy.yml.j2"
-if [[ -n "$SERVICE_TYPE_CFG" && -f "$TYPE_TEMPLATE_DIR/deploy.yml.j2" ]]; then
-    DEPLOY_TEMPLATE_FILE="$TYPE_TEMPLATE_DIR/deploy.yml.j2"
+# Use new template merging system
+log_step "Merging service template..."
+export TEMPLATES_BASE="$TEMPLATES_BASE"
+source "$SCRIPT_DIR/merge-service-template.sh"
+if ! merge_service_template "$SERVICE_NAME" "$SERVICE_TYPE_CFG" "$DEPLOYMENT_DIR"; then
+    log_error "Failed to merge service template"
+    exit 1
 fi
 
-# Copy and customize deploy.yml
-cp "$DEPLOY_TEMPLATE_FILE" "$DEPLOYMENT_DIR/deploy.yml"
-sed -i '' "s/{{ service_name }}/$SERVICE_NAME/g" "$DEPLOYMENT_DIR/deploy.yml"
+# Generate Ansible playbook using sed replacements
+log_step "Generating Ansible playbook..."
 
 # Choose group_vars template (prefer service-type specific)
 GROUP_VARS_TEMPLATE_FILE="$TEMPLATE_DIR/group_vars/all.yml.j2"
@@ -623,53 +622,8 @@ log_info "✅ Generated Ansible configuration"
 log_step "Copying service templates..."
 cp -r "$TEMPLATE_DIR/templates/"* "$DEPLOYMENT_DIR/templates/"
 
-# Ensure scripts directory and per-deployment custom_script.sh
-mkdir -p "$DEPLOYMENT_DIR/scripts"
-if [[ ! -f "$DEPLOYMENT_DIR/scripts/custom_script.sh" ]]; then
-  log_step "Creating default custom_script.sh"
-  cat > "$DEPLOYMENT_DIR/scripts/custom_script.sh" << 'EOF'
-#!/bin/bash
-set -euo pipefail
-
-# Generic hook. Use env vars: APP_DIR, SERVICE_TYPE, NODEJS_RUNTIME, APP_PORT, SERVICE_NAME
-# Extend per service type as needed.
-
-cd "${APP_DIR:-.}"
-
-case "${SERVICE_TYPE:-}" in
-  nodejs)
-    if [[ "${NODEJS_RUNTIME:-bun}" == "bun" ]]; then
-      if command -v bun >/dev/null 2>&1; then
-        bun install
-        if jq -er '.scripts.build' package.json >/dev/null 2>&1; then
-          bun run build || true
-        fi
-      else
-        echo "bun not found; skipping"
-      fi
-    else
-      if command -v npm >/dev/null 2>&1; then
-        npm install --omit=dev || npm install --production || true
-        if jq -er '.scripts.build' package.json >/dev/null 2>&1; then
-          npm run build || true
-        fi
-      else
-        echo "npm not found; skipping"
-      fi
-    fi
-    ;;
-  *)
-    echo "No custom actions for SERVICE_TYPE=${SERVICE_TYPE:-unknown}"
-    ;;
-
-esac
-
-echo "custom_script.sh completed for ${SERVICE_NAME:-service}"
-EOF
-  chmod +x "$DEPLOYMENT_DIR/scripts/custom_script.sh"
-else
-  log_step "Preserving existing custom_script.sh"
-fi
+# Custom script is now handled by the template merging system
+# No action needed here - the merging script handles custom script creation/preservation
 
 # Rename the generic service template to match the service name
 if [[ -f "$DEPLOYMENT_DIR/templates/hello-world-bun-app.service.j2" ]]; then

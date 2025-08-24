@@ -1,0 +1,52 @@
+# Go Service Type Configuration
+service_type: golang
+runtime_name: "Go"
+
+# Runtime installation tasks
+runtime_install:
+  - name: "Install Go runtime"
+    shell: |
+      cd /tmp
+      wget https://go.dev/dl/go1.21.0.linux-amd64.tar.gz
+      tar -C /usr/local -xzf go1.21.0.linux-amd64.tar.gz
+      ln -sf /usr/local/go/bin/go /usr/local/bin/go
+    args:
+      creates: /usr/local/bin/go
+
+# Dependency installation
+dependency_install:
+  - name: "Build Go application"
+    shell: |
+      export PATH=$PATH:/usr/local/go/bin
+      go mod download
+      go build -o {{ app_service_name }} {{ app_main_file | default('.') }}
+    args:
+      chdir: "{{ app_dir }}"
+    become_user: "{{ app_user }}"
+    environment:
+      GOOS: linux
+      GOARCH: amd64
+
+# File exclusions for tar archive
+file_exclusions:
+  - ".git"
+  - "deployment"
+  - "deployments"
+  - "*.log"
+  - ".env"
+  - "vendor"
+  - "*.exe"
+
+# Default environment variables
+default_env:
+  CGO_ENABLED: "0"
+
+# Health check endpoint
+health_check_path: "/health"
+
+# Default systemd service configuration
+systemd_service:
+  Type: simple
+  ExecStart: "{{ app_dir }}/{{ app_service_name }}"
+  Restart: always
+  RestartSec: 10

@@ -1,0 +1,23 @@
+# Node.js/Bun Runtime Installation Tasks
+- name: Install Node.js runtime
+  apt:
+    name:
+      - nodejs
+      - npm
+    state: present
+  when:
+    - not internet_test.failed
+    - nodejs_runtime == "node"
+
+- name: Install Bun runtime system-wide
+  shell: |
+    curl -fsSL https://bun.sh/install | bash -s "bun-v1.0.20"
+    cp /root/.bun/bin/bun /usr/local/bin/bun
+    chmod 755 /usr/local/bin/bun
+    chown root:root /usr/local/bin/bun
+  args:
+    creates: /usr/local/bin/bun
+  when:
+    - not internet_test.failed
+    - nodejs_runtime == "bun"
+

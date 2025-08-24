@@ -1,0 +1,25 @@
+# Tor-Proxy Runtime Installation Tasks
+- name: Install Tor and Privoxy
+  apt:
+    name:
+      - tor
+      - privoxy
+      - qemu-guest-agent
+      - ufw
+      - curl
+      - netcat-openbsd
+    state: present
+  when: not internet_test.failed
+
+- name: Configure firewall for Tor and HTTP proxy
+  ufw:
+    rule: allow
+    port: "{{ item }}"
+  loop:
+    - "22"
+    - "{{ app_port }}"
+    - "{{ http_proxy_port | default('8118') }}"
+
+- name: Enable firewall
+  ufw:
+    state: enabled

@@ -2,53 +2,11 @@
 service_type: tor-proxy
 runtime_name: "Tor + Privoxy"
 
-# Runtime installation tasks
-runtime_install:
-  - name: "Install Tor and Privoxy"
-    apt:
-      name:
-        - tor
-        - privoxy
-      state: present
-
-# Dependency/configuration steps (applied after install)
-dependency_install:
-  - name: "Configure torrc SocksPort"
-    lineinfile:
-      path: /etc/tor/torrc
-      regexp: '^#?\s*SocksPort\s+'
-      line: "SocksPort 0.0.0.0:{{ app_port }}"
-      create: yes
-    notify: restart tor
-
-  - name: "Configure torrc ControlPort"
-    lineinfile:
-      path: /etc/tor/torrc
-      regexp: '^#?\s*ControlPort\s+'
-      line: "ControlPort 9051"
-      create: yes
-    notify: restart tor
-
-  - name: "Ensure tor is enabled and started"
-    systemd:
-      name: tor
-      state: started
-      enabled: yes
-
-  - name: "Configure Privoxy listen"
-    lineinfile:
-      path: /etc/privoxy/config
-      regexp: '^\s*listen-address\s+'
-      line: "listen-address 0.0.0.0:{{ http_proxy_port | default('8118') }}"
-    notify: restart privoxy
-
-  - name: "Configure Privoxy to forward to Tor"
-    lineinfile:
-      path: /etc/privoxy/config
-      regexp: '^\s*forward-socks5t\s+/\s+127.0.0.1:'
-      line: "forward-socks5t / 127.0.0.1:{{ app_port }} ."
-      insertafter: EOF
-    notify: restart privoxy
+# Template parts provided by this service type
+provides_runtime_install: true
+provides_dependency_install: true
+provides_build_tasks: false
+provides_systemd_service: false
 
 # File exclusions (no app source)
 file_exclusions:

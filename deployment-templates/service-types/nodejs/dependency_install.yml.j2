@@ -1,0 +1,15 @@
+# Node.js/Bun Dependency Installation Tasks
+- name: Install dependencies with npm
+  shell: npm install --production
+  args:
+    chdir: "{{ app_dir }}"
+  become_user: "{{ app_user }}"
+  when: nodejs_runtime == "node"
+
+- name: Install dependencies with Bun
+  shell: /usr/local/bin/bun install --production
+  args:
+    chdir: "{{ app_dir }}"
+  become_user: "{{ app_user }}"
+  when: nodejs_runtime == "bun"
+

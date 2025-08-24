@@ -1,5 +1,5 @@
 ---
-# Generic container deployment playbook for {{ service_name }}
+# Deployment playbook for {{ service_name }} service
 - name: Deploy {{ service_name }} to Proxmox VE
   hosts: localhost
   connection: local
@@ -61,7 +61,6 @@
       slurp:
         src: "{{ ssh_public_key_path }}"
       register: ssh_public_key_content
-      when: ssh_public_key_path is defined
 
     - name: Install Ansible collections from requirements.yml (idempotent)
       command: ansible-galaxy collection install -r requirements.yml --force
@@ -77,7 +76,7 @@
         curl -k -X POST \
           -H "Authorization: PVEAPIToken={{ proxmox_token_id }}={{ proxmox_token_secret }}" \
           -H "Content-Type: application/x-www-form-urlencoded" \
-          -d "vmid={{ vm_id }}&unprivileged=1&features=nesting%3D1&password={{ (lookup('password', '/tmp/vm_root_password chars=ascii_letters,digits length=16')) | urlencode }}{% if ssh_public_key_content is defined %}&ssh-public-keys={{ ssh_public_key_content.content | b64decode | trim | urlencode }}{% endif %}&ostemplate={{ vm_os_template | urlencode }}&rootfs={{ (vm_storage ~ ':' ~ vm_disk_size) | urlencode }}&cores={{ vm_cores }}&memory={{ vm_memory }}&swap={{ vm_swap }}&net0={{ ('name=eth0,bridge=' ~ vm_network_bridge ~ ',firewall=1,ip=dhcp') | urlencode }}" \
+          -d "vmid={{ vm_id }}&unprivileged=1&features=nesting%3D1&password={{ (lookup('password', '/tmp/vm_root_password chars=ascii_letters,digits length=16')) | urlencode }}&ssh-public-keys={{ ssh_public_key_content.content | b64decode | trim | urlencode }}&ostemplate={{ vm_os_template | urlencode }}&rootfs={{ (vm_storage ~ ':' ~ vm_disk_size) | urlencode }}&cores={{ vm_cores }}&memory={{ vm_memory }}&swap={{ vm_swap }}&net0={{ ('name=eth0,bridge=' ~ vm_network_bridge ~ ',firewall=1,ip=dhcp') | urlencode }}" \
           "https://{{ proxmox_host }}:8006/api2/json/nodes/{{ proxmox_node }}/lxc"
       register: proxmox_vm
       failed_when: false
@@ -304,20 +303,65 @@
       ufw:
         state: enabled
 
-    # SERVICE-SPECIFIC INJECTION POINT: Runtime Installation
-    {% if service_runtime_install is defined and service_runtime_install %}
-    {% include 'service-parts/runtime_install.yml.j2' %}
-    {% endif %}
+    - name: Install PostgreSQL
+      apt:
+        name:
+          - postgresql
+          - postgresql-contrib
+          - python3-psycopg2
+        state: present
+      when:
+        - not internet_test.failed
+        - service_type == 'database'
 
-    # SERVICE-SPECIFIC INJECTION POINT: Dependency Installation
-    {% if service_dependency_install is defined and service_dependency_install %}
-    {% include 'service-parts/dependency_install.yml.j2' %}
-    {% endif %}
+    - name: Ensure PostgreSQL is running
+      systemd:
+        name: postgresql
+        state: started
+        enabled: yes
+      when:
+        - not internet_test.failed
+        - service_type == 'database'
 
-    # SERVICE-SPECIFIC INJECTION POINT: Build Tasks
-    {% if service_build_tasks is defined and service_build_tasks %}
-    {% include 'service-parts/build_tasks.yml.j2' %}
-    {% endif %}
+    - name: Discover PostgreSQL config directory
+      shell: |
+        dirname $(readlink -f $(find /etc/postgresql -type f -name postgresql.conf | head -n1))
+      register: pg_conf_dir
+      changed_when: false
+      when: service_type == 'database'
+
+    - name: Configure listen_addresses in postgresql.conf
+      lineinfile:
+        path: "{{ pg_conf_dir.stdout }}/postgresql.conf"
+        regexp: "^#?listen_addresses\\s*=.*"
+        line: "listen_addresses = '*'"
+        backup: yes
+      when: service_type == 'database'
+
+    - name: Ensure pg_hba allows remote connections
+      blockinfile:
+        path: "{{ pg_conf_dir.stdout }}/pg_hba.conf"
+        marker: "# {mark} ANSIBLE MANAGED BLOCK - remote access"
+        block: |
+          host    all             all             0.0.0.0/0               md5
+          host    all             all             ::/0                    md5
+      when: service_type == 'database'
+
+    - name: Restart PostgreSQL to apply config
+      systemd:
+        name: postgresql
+        state: restarted
+      when: service_type == 'database'
+
+    - name: Wait for PostgreSQL to listen on port
+      wait_for:
+        host: 127.0.0.1
+        port: "{{ app_port }}"
+        timeout: 30
+        state: started
+      when: service_type == 'database'
+
+    # Note: Runtime installs and dependency installs are handled by service-specific hooks/scripts
 
     - name: Create application user
       user:
@@ -430,10 +474,23 @@
         owner: "{{ app_user }}"
         group: "{{ app_user }}"
         mode: '0600'
-      when: service_type != 'database'
 
-    # SERVICE-SPECIFIC INJECTION POINT: Systemd Service
-    {% if service_systemd_service is defined and service_systemd_service %}
+    - name: Initialize PostgreSQL database
+      postgresql_db:
+        name: "{{ db_name | default(service_name) }}"
+        state: present
+      become_user: postgres
+      when: service_type == 'database'
+
+    - name: Create PostgreSQL user
+      postgresql_user:
+        name: "{{ db_user | default(service_name) }}"
+        password: "{{ db_password }}"
+        db: "{{ db_name | default(service_name) }}"
+        priv: ALL
+      become_user: postgres
+      when: service_type == 'database'
+
     - name: Create systemd service file
       template:
         src: "{{ app_service_name }}.service.j2"
@@ -449,7 +506,6 @@
         state: started
         daemon_reload: yes
       when: service_type != 'database'
-    {% endif %}
 
     - name: Wait for service to be running
       pause:
@@ -592,8 +648,6 @@
               
       when: cloudflare_enabled | bool
 
-    # SERVICE STATUS CHECKS (only if systemd service is enabled)
-    {% if service_systemd_service is defined and service_systemd_service %}
     - name: Check service status
       systemd:
         name: "{{ app_service_name }}"
@@ -633,18 +687,9 @@
       debug:
         var: service_logs.stdout_lines
       when: service_type != 'database'
-    {% endif %}
     
 
   handlers:
     - name: reload systemd
       systemd:
         daemon_reload: yes
-    - name: restart tor
-      systemd:
-        name: tor
-        state: restarted
-    - name: restart privoxy
-      systemd:
-        name: privoxy
-        state: restarted

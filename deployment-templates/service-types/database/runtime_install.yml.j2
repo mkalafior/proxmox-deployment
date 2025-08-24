@@ -1,0 +1,87 @@
+# Database Runtime Installation Tasks
+- name: Install PostgreSQL
+  apt:
+    name:
+      - postgresql
+      - postgresql-contrib
+      - python3-psycopg2
+    state: present
+  when:
+    - not internet_test.failed
+    - db_type == 'postgresql'
+
+- name: Install MySQL
+  apt:
+    name:
+      - mysql-server
+      - python3-pymysql
+    state: present
+  when:
+    - not internet_test.failed
+    - db_type == 'mysql'
+
+- name: Install Redis
+  apt:
+    name: redis-server
+    state: present
+  when:
+    - not internet_test.failed
+    - db_type == 'redis'
+
+- name: Install MongoDB
+  shell: |
+    wget -qO - https://www.mongodb.org/static/pgp/server-6.0.asc | apt-key add -
+    echo "deb [ arch=amd64,arm64 ] https://repo.mongodb.org/apt/ubuntu jammy/mongodb-org/6.0 multiverse" | tee /etc/apt/sources.list.d/mongodb-org-6.0.list
+    apt-get update
+    apt-get install -y mongodb-org
+  when:
+    - not internet_test.failed
+    - db_type == 'mongodb'
+
+- name: Ensure PostgreSQL is running
+  systemd:
+    name: postgresql
+    state: started
+    enabled: yes
+  when:
+    - not internet_test.failed
+    - db_type == 'postgresql'
+
+- name: Discover PostgreSQL config directory
+  shell: |
+    dirname $(readlink -f $(find /etc/postgresql -type f -name postgresql.conf | head -n1))
+  register: pg_conf_dir
+  changed_when: false
+  when: db_type == 'postgresql'
+
+- name: Configure listen_addresses in postgresql.conf
+  lineinfile:
+    path: "{{ pg_conf_dir.stdout }}/postgresql.conf"
+    regexp: "^#?listen_addresses\\s*=.*"
+    line: "listen_addresses = '*'"
+    backup: yes
+  when: db_type == 'postgresql'
+
+- name: Ensure pg_hba allows remote connections
+  blockinfile:
+    path: "{{ pg_conf_dir.stdout }}/pg_hba.conf"
+    marker: "# {mark} ANSIBLE MANAGED BLOCK - remote access"
+    block: |
+      host    all             all             0.0.0.0/0               md5
+      host    all             all             ::/0                    md5
+  when: db_type == 'postgresql'
+
+- name: Restart PostgreSQL to apply config
+  systemd:
+    name: postgresql
+    state: restarted
+  when: db_type == 'postgresql'
+
+- name: Wait for PostgreSQL to listen on port
+  wait_for:
+    host: 127.0.0.1
+    port: "{{ app_port }}"
+    timeout: 30
+    state: started
+  when: db_type == 'postgresql'
+

@@ -133,48 +133,68 @@ load_service_config() {
     done < "$config_file"
 }
 
-# Update deploy.yml from template
+# Update deploy.yml using new template merging system
 update_deploy_yml() {
     local service="$1"
     local service_type="$2"
     local dry_run="$3"
-    
-    # Prefer service-type specific template if available
-    local type_template_file="${TEMPLATES_BASE}/service-types/${service_type}/deploy.yml.j2"
-    local template_file="${TEMPLATES_BASE}/base/deploy.yml.j2"
-    if [[ -f "$type_template_file" ]]; then
-        template_file="$type_template_file"
-    fi
+
     local deployment_file="${DEPLOYMENTS_BASE}/$service/deploy.yml"
-    
-    if ! check_template_modified "$template_file" "$deployment_file"; then
+
+    # Check if any template files have been modified
+    local template_modified=false
+    local base_template="${TEMPLATES_BASE}/base/deploy.yml.j2"
+    local service_template_dir="${TEMPLATES_BASE}/service-types/${service_type}"
+
+    # Check base template
+    if [[ -f "$base_template" ]] && check_template_modified "$base_template" "$deployment_file"; then
+        template_modified=true
+    fi
+
+    # Check service-specific template parts
+    if [[ -d "$service_template_dir" ]]; then
+        for template_part in "$service_template_dir"/*.yml.j2; do
+            if [[ -f "$template_part" ]] && check_template_modified "$template_part" "$deployment_file"; then
+                template_modified=true
+                break
+            fi
+        done
+    fi
+
+    if [[ "$template_modified" == "false" ]]; then
         return 0  # No update needed
     fi
-    
-    log_service "Updating deploy.yml for $service ($service_type)"
-    
+
+    log_service "Regenerating merged template for $service ($service_type)"
+
     if [[ "$dry_run" == "true" ]]; then
-        echo "   Would update: $deployment_file"
+        echo "   Would regenerate merged template for: $service ($service_type)"
         return 0
     fi
-    
+
     # Create backup
     if [[ "$CREATE_BACKUP" == "true" && -f "$deployment_file" ]]; then
         cp "$deployment_file" "${deployment_file}.bak.$(date +%Y%m%d_%H%M%S)"
     fi
-    
+
     # Load service configuration
     load_service_config "$service"
-    
-    # Generate updated deploy.yml using simple sed replacements
-    # (This is a simplified approach - in production you might want to use a proper template engine)
-    cp "$template_file" "$deployment_file"
-    
-    # Replace template variables with actual values
-    sed -i '' "s/{{ service_name }}/$service/g" "$deployment_file"
-    sed -i '' "s/{{ service_type }}/${service_type}/g" "$deployment_file"
-    
-    log_info "✅ Updated deploy.yml for $service"
+
+    # Source the merging script
+    if [[ -f "${TEMPLATES_BASE}/generators/merge-service-template.sh" ]]; then
+        source "${TEMPLATES_BASE}/generators/merge-service-template.sh"
+
+        # Regenerate merged template
+        if merge_service_template "$service" "$service_type" "${DEPLOYMENTS_BASE}/$service"; then
+            log_info "✅ Updated deploy.yml for $service"
+        else
+            log_error "Failed to update deploy.yml for $service"
+            return 1
+        fi
+    else
+        log_error "Template merging script not found: ${TEMPLATES_BASE}/generators/merge-service-template.sh"
+        return 1
+    fi
 }
 
 # Update group_vars/all.yml from template

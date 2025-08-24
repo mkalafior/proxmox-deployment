@@ -1,0 +1,70 @@
+# Tor-Proxy Configuration and Setup Tasks
+- name: Configure torrc - SocksPort
+  lineinfile:
+    path: /etc/tor/torrc
+    regexp: '^#?\s*SocksPort\s+'
+    line: "SocksPort 0.0.0.0:{{ app_port }}"
+    create: yes
+    backup: yes
+  notify: restart tor
+
+- name: Configure torrc - ControlPort
+  lineinfile:
+    path: /etc/tor/torrc
+    regexp: '^#?\s*ControlPort\s+'
+    line: "ControlPort 9051"
+    create: yes
+    backup: yes
+  notify: restart tor
+
+- name: Configure torrc - ClientOnly
+  lineinfile:
+    path: /etc/tor/torrc
+    regexp: '^#?\s*ClientOnly\s+'
+    line: "ClientOnly 1"
+    create: yes
+    backup: yes
+  notify: restart tor
+
+- name: Ensure tor service is enabled and started
+  systemd:
+    name: tor
+    state: started
+    enabled: yes
+
+- name: Configure Privoxy listen-address
+  lineinfile:
+    path: /etc/privoxy/config
+    regexp: '^\s*listen-address\s+'
+    line: "listen-address 0.0.0.0:{{ http_proxy_port | default('8118') }}"
+    backup: yes
+  notify: restart privoxy
+
+- name: Configure Privoxy to forward to Tor SOCKS5
+  lineinfile:
+    path: /etc/privoxy/config
+    regexp: '^\s*forward-socks5t\s+/\s+127.0.0.1:'
+    line: "forward-socks5t / 127.0.0.1:{{ app_port }} ."
+    insertafter: EOF
+    backup: yes
+  notify: restart privoxy
+
+- name: Ensure privoxy service is enabled and started
+  systemd:
+    name: privoxy
+    state: started
+    enabled: yes
+
+- name: Wait for Tor SOCKS to listen
+  wait_for:
+    host: 127.0.0.1
+    port: "{{ app_port }}"
+    timeout: 30
+    state: started
+
+- name: Wait for HTTP proxy to listen
+  wait_for:
+    host: 127.0.0.1
+    port: "{{ http_proxy_port | default('8118') }}"
+    timeout: 30
+    state: started

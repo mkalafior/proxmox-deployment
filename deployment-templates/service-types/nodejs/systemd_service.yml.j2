@@ -1,0 +1,24 @@
+[Unit]
+Description={{ service_name }} Node.js Application
+After=network.target
+
+[Service]
+Type=simple
+User={{ app_user }}
+Group={{ app_user }}
+WorkingDirectory={{ app_dir }}
+{% if nodejs_runtime == "bun" %}
+ExecStart=/usr/local/bin/bun run start
+{% else %}
+ExecStart=/usr/bin/node {{ app_main_file | default('index.js') }}
+{% endif %}
+Restart=always
+RestartSec=10
+Environment=NODE_ENV=production
+{% if app_port is defined %}
+Environment=PORT={{ app_port }}
+{% endif %}
+
+[Install]
+WantedBy=multi-user.target
+

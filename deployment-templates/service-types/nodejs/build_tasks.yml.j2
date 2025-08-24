@@ -1,0 +1,33 @@
+# Node.js/Bun Build Tasks
+- name: Check if build script exists in package.json
+  shell: |
+    if command -v jq >/dev/null 2>&1; then
+      jq -er '.scripts.build' "{{ app_dir }}/package.json" >/dev/null 2>&1
+    else
+      grep -q '"build"' "{{ app_dir }}/package.json"
+    fi
+  register: build_script_exists
+  failed_when: false
+  changed_when: false
+  when: nodejs_runtime is defined
+
+- name: Build TypeScript application with npm
+  shell: npm run build
+  args:
+    chdir: "{{ app_dir }}"
+  become_user: "{{ app_user }}"
+  when:
+    - nodejs_runtime == "node"
+    - build_script_exists.rc == 0
+  ignore_errors: true
+
+- name: Build TypeScript application with Bun
+  shell: /usr/local/bin/bun run build
+  args:
+    chdir: "{{ app_dir }}"
+  become_user: "{{ app_user }}"
+  when:
+    - nodejs_runtime == "bun"
+    - build_script_exists.rc == 0
+  ignore_errors: true
+

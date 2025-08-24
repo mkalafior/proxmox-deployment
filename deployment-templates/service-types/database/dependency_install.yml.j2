@@ -1,0 +1,85 @@
+# Database Configuration and Setup Tasks
+- name: Initialize PostgreSQL database
+  postgresql_db:
+    name: "{{ db_name | default(service_name) }}"
+    state: present
+  become_user: postgres
+  when: db_type == 'postgresql'
+
+- name: Create PostgreSQL user
+  postgresql_user:
+    name: "{{ db_user | default(service_name) }}"
+    password: "{{ db_password }}"
+    db: "{{ db_name | default(service_name) }}"
+    priv: ALL
+  become_user: postgres
+  when: db_type == 'postgresql'
+
+- name: Configure Redis
+  lineinfile:
+    path: /etc/redis/redis.conf
+    regexp: '^bind'
+    line: 'bind 0.0.0.0'
+  when: db_type == 'redis'
+
+- name: Ensure Redis is running
+  systemd:
+    name: redis-server
+    state: started
+    enabled: yes
+  when: db_type == 'redis'
+
+- name: Ensure MySQL is running
+  systemd:
+    name: mysql
+    state: started
+    enabled: yes
+  when: db_type == 'mysql'
+
+- name: Configure MySQL for remote connections
+  lineinfile:
+    path: /etc/mysql/mysql.conf.d/mysqld.cnf
+    regexp: '^bind-address'
+    line: 'bind-address = 0.0.0.0'
+  when: db_type == 'mysql'
+
+- name: Restart MySQL to apply config
+  systemd:
+    name: mysql
+    state: restarted
+  when: db_type == 'mysql'
+
+- name: Create MySQL database
+  mysql_db:
+    name: "{{ db_name | default(service_name) }}"
+    state: present
+  when: db_type == 'mysql'
+
+- name: Create MySQL user
+  mysql_user:
+    name: "{{ db_user | default(service_name) }}"
+    password: "{{ db_password }}"
+    priv: "{{ db_name | default(service_name) }}.*:ALL"
+    state: present
+  when: db_type == 'mysql'
+
+- name: Ensure MongoDB is running
+  systemd:
+    name: mongod
+    state: started
+    enabled: yes
+  when: db_type == 'mongodb'
+
+- name: Configure MongoDB for remote connections
+  lineinfile:
+    path: /etc/mongod.conf
+    regexp: '^  bindIp:'
+    line: '  bindIp: 0.0.0.0'
+  when: db_type == 'mongodb'
+
+- name: Restart MongoDB to apply config
+  systemd:
+    name: mongod
+    state: restarted
+  when: db_type == 'mongodb'
+
