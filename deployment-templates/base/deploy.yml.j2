@@ -361,27 +361,7 @@
         state: started
       when: service_type == 'database'
 
-    - name: Install Bun runtime system-wide
-      shell: |
-        curl -fsSL https://bun.sh/install | bash -s "bun-v1.0.20"
-        cp /root/.bun/bin/bun /usr/local/bin/bun
-        chmod 755 /usr/local/bin/bun
-        chown root:root /usr/local/bin/bun
-      args:
-        creates: /usr/local/bin/bun
-      register: bun_install
-      when: service_type == 'nodejs' and (nodejs_runtime | default('bun')) == 'bun'
-
-    - name: Verify Bun installation
-      command: bun --version
-      register: bun_version
-      changed_when: false
-      when: service_type == 'nodejs' and (nodejs_runtime | default('bun')) == 'bun'
-
-    - name: Display Bun version
-      debug:
-        msg: "Bun version: {{ bun_version.stdout }}"
-      when: service_type == 'nodejs' and (nodejs_runtime | default('bun')) == 'bun'
+    # Note: Runtime installs and dependency installs are handled by service-specific hooks/scripts
 
     - name: Create application user
       user:
@@ -450,40 +430,42 @@
         recurse: yes
       when: service_type != 'database'
 
-    - name: Check if package.json exists
+    - name: Detect local custom deployment script
       stat:
-        path: "{{ app_dir }}/package.json"
-      register: package_json_file
-      when: service_type == 'nodejs'
+        path: "{{ playbook_dir }}/scripts/custom_script.sh"
+      register: local_custom_script
+      delegate_to: localhost
+      become: false
 
-    - name: Install Bun dependencies
-      shell: |
-        /usr/local/bin/bun install
+    - name: Upload custom deployment script to container
+      copy:
+        src: "{{ playbook_dir }}/scripts/custom_script.sh"
+        dest: "/opt/custom_script.sh"
+        mode: '0755'
+        owner: root
+        group: root
+      when: local_custom_script.stat.exists
+
+    - name: Run custom deployment script (service-specific hook)
+      shell: "/opt/custom_script.sh"
       args:
         chdir: "{{ app_dir }}"
       become_user: "{{ app_user }}"
-      when:
-        - service_type == 'nodejs'
-        - (nodejs_runtime | default('bun')) == 'bun'
-        - package_json_file.stat.exists
+      environment:
+        APP_DIR: "{{ app_dir }}"
+        SERVICE_TYPE: "{{ service_type | default('') }}"
+        NODEJS_RUNTIME: "{{ nodejs_runtime | default('') }}"
+        APP_PORT: "{{ app_port | string }}"
+        SERVICE_NAME: "{{ service_name }}"
+      register: custom_script_result
+      changed_when: false
+      failed_when: false
+      when: local_custom_script.stat.exists
 
-    - name: Install Node.js runtime (apt)
-      apt:
-        name:
-          - nodejs
-          - npm
-        state: present
-      when: service_type == 'nodejs' and (nodejs_runtime | default('bun')) == 'node'
-
-    - name: Install npm dependencies
-      shell: npm install --production
-      args:
-        chdir: "{{ app_dir }}"
-      become_user: "{{ app_user }}"
-      when:
-        - service_type == 'nodejs'
-        - (nodejs_runtime | default('bun')) == 'node'
-        - package_json_file.stat.exists
+    - name: Show custom script output
+      debug:
+        var: custom_script_result.stdout_lines
+      when: local_custom_script.stat.exists
 
     - name: Create environment file
       template:

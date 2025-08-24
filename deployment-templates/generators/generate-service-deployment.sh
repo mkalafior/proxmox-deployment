@@ -623,6 +623,54 @@ log_info "✅ Generated Ansible configuration"
 log_step "Copying service templates..."
 cp -r "$TEMPLATE_DIR/templates/"* "$DEPLOYMENT_DIR/templates/"
 
+# Ensure scripts directory and per-deployment custom_script.sh
+mkdir -p "$DEPLOYMENT_DIR/scripts"
+if [[ ! -f "$DEPLOYMENT_DIR/scripts/custom_script.sh" ]]; then
+  log_step "Creating default custom_script.sh"
+  cat > "$DEPLOYMENT_DIR/scripts/custom_script.sh" << 'EOF'
+#!/bin/bash
+set -euo pipefail
+
+# Generic hook. Use env vars: APP_DIR, SERVICE_TYPE, NODEJS_RUNTIME, APP_PORT, SERVICE_NAME
+# Extend per service type as needed.
+
+cd "${APP_DIR:-.}"
+
+case "${SERVICE_TYPE:-}" in
+  nodejs)
+    if [[ "${NODEJS_RUNTIME:-bun}" == "bun" ]]; then
+      if command -v bun >/dev/null 2>&1; then
+        bun install
+        if jq -er '.scripts.build' package.json >/dev/null 2>&1; then
+          bun run build || true
+        fi
+      else
+        echo "bun not found; skipping"
+      fi
+    else
+      if command -v npm >/dev/null 2>&1; then
+        npm install --omit=dev || npm install --production || true
+        if jq -er '.scripts.build' package.json >/dev/null 2>&1; then
+          npm run build || true
+        fi
+      else
+        echo "npm not found; skipping"
+      fi
+    fi
+    ;;
+  *)
+    echo "No custom actions for SERVICE_TYPE=${SERVICE_TYPE:-unknown}"
+    ;;
+
+esac
+
+echo "custom_script.sh completed for ${SERVICE_NAME:-service}"
+EOF
+  chmod +x "$DEPLOYMENT_DIR/scripts/custom_script.sh"
+else
+  log_step "Preserving existing custom_script.sh"
+fi
+
 # Rename the generic service template to match the service name
 if [[ -f "$DEPLOYMENT_DIR/templates/hello-world-bun-app.service.j2" ]]; then
     mv "$DEPLOYMENT_DIR/templates/hello-world-bun-app.service.j2" "$DEPLOYMENT_DIR/templates/${SERVICE_NAME}.service.j2"
