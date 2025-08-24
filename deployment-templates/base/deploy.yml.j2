@@ -325,16 +325,6 @@
         group: "{{ app_user }}"
         mode: '0755'
 
-    # SERVICE-SPECIFIC INJECTION POINT: Dependency Installation
-    {% if service_dependency_install is defined and service_dependency_install %}
-    {% include 'service-parts/dependency_install.yml.j2' %}
-    {% endif %}
-
-    # SERVICE-SPECIFIC INJECTION POINT: Build Tasks
-    {% if service_build_tasks is defined and service_build_tasks %}
-    {% include 'service-parts/build_tasks.yml.j2' %}
-    {% endif %}
-
     - name: Copy application files using tar
       block:
         - name: Create tar archive of application
@@ -385,6 +375,16 @@
         group: "{{ app_user }}"
         recurse: yes
       when: service_type != 'database'
+
+    # SERVICE-SPECIFIC INJECTION POINT: Dependency Installation
+    {% if service_dependency_install is defined and service_dependency_install %}
+    {% include 'service-parts/dependency_install.yml.j2' %}
+    {% endif %}
+
+    # SERVICE-SPECIFIC INJECTION POINT: Build Tasks
+    {% if service_build_tasks is defined and service_build_tasks %}
+    {% include 'service-parts/build_tasks.yml.j2' %}
+    {% endif %}
 
     - name: Detect local custom deployment script
       stat:
