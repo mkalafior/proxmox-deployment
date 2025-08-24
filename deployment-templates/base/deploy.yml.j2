@@ -309,16 +309,6 @@
     {% include 'service-parts/runtime_install.yml.j2' %}
     {% endif %}
 
-    # SERVICE-SPECIFIC INJECTION POINT: Dependency Installation
-    {% if service_dependency_install is defined and service_dependency_install %}
-    {% include 'service-parts/dependency_install.yml.j2' %}
-    {% endif %}
-
-    # SERVICE-SPECIFIC INJECTION POINT: Build Tasks
-    {% if service_build_tasks is defined and service_build_tasks %}
-    {% include 'service-parts/build_tasks.yml.j2' %}
-    {% endif %}
-
     - name: Create application user
       user:
         name: "{{ app_user }}"
@@ -334,6 +324,16 @@
         owner: "{{ app_user }}"
         group: "{{ app_user }}"
         mode: '0755'
+
+    # SERVICE-SPECIFIC INJECTION POINT: Dependency Installation
+    {% if service_dependency_install is defined and service_dependency_install %}
+    {% include 'service-parts/dependency_install.yml.j2' %}
+    {% endif %}
+
+    # SERVICE-SPECIFIC INJECTION POINT: Build Tasks
+    {% if service_build_tasks is defined and service_build_tasks %}
+    {% include 'service-parts/build_tasks.yml.j2' %}
+    {% endif %}
 
     - name: Copy application files using tar
       block:
