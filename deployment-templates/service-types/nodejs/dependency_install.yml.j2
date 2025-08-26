@@ -1,15 +1,44 @@
 # Node.js/Bun Dependency Installation Tasks
+- name: Check if package.json has dependencies
+  shell: |
+    if command -v jq >/dev/null 2>&1; then
+      deps=$(jq -r '.dependencies // {} | keys | length' "{{ app_dir }}/package.json")
+      devdeps=$(jq -r '.devDependencies // {} | keys | length' "{{ app_dir }}/package.json")
+      echo $((deps + devdeps))
+    else
+      if grep -q '"dependencies".*{[^}]' "{{ app_dir }}/package.json" || grep -q '"devDependencies".*{[^}]' "{{ app_dir }}/package.json"; then
+        echo "1"
+      else
+        echo "0"
+      fi
+    fi
+  register: has_dependencies
+  changed_when: false
+
 - name: Install dependencies with npm
   shell: npm install --production
   args:
     chdir: "{{ app_dir }}"
   become_user: "{{ app_user }}"
-  when: nodejs_runtime == "node"
+  when: 
+    - nodejs_runtime == "node"
+    - has_dependencies.stdout != "0"
 
 - name: Install dependencies with Bun
   shell: /usr/local/bin/bun install --production
   args:
     chdir: "{{ app_dir }}"
   become_user: "{{ app_user }}"
-  when: nodejs_runtime == "bun"
+  when: 
+    - nodejs_runtime == "bun"
+    - has_dependencies.stdout != "0"
+
+- name: Create empty lockfile for Bun when no dependencies
+  shell: /usr/local/bin/bun install
+  args:
+    chdir: "{{ app_dir }}"
+  become_user: "{{ app_user }}"
+  when: 
+    - nodejs_runtime == "bun"
+    - has_dependencies.stdout == "0"
 

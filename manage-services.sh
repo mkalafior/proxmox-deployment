@@ -91,7 +91,6 @@ execute_service_command() {
             log_service "Executing info for $service via pxdcli"
             PROJECT_ROOT_OVERRIDE="$(pwd)" tools/proxmox-deploy info "$service"
             ;;
-            ;;
         deploy)
             if [[ -f "$service_dir/deploy.sh" ]]; then
                 log_service "Deploying $service"
