@@ -1,19 +1,15 @@
 # Node.js/Bun Dependency Installation Tasks
-- name: Check if package.json has dependencies
-  shell: |
-    if command -v jq >/dev/null 2>&1; then
-      deps=$(jq -r '.dependencies // {} | keys | length' "{{ app_dir }}/package.json")
-      devdeps=$(jq -r '.devDependencies // {} | keys | length' "{{ app_dir }}/package.json")
-      echo $((deps + devdeps))
-    else
-      if grep -q '"dependencies".*{[^}]' "{{ app_dir }}/package.json" || grep -q '"devDependencies".*{[^}]' "{{ app_dir }}/package.json"; then
-        echo "1"
-      else
-        echo "0"
-      fi
-    fi
-  register: has_dependencies
-  changed_when: false
+- name: Check if lockfile exists (Bun)
+  stat:
+    path: "{{ app_dir }}/bun.lock"
+  register: bun_lockfile
+  when: nodejs_runtime == "bun"
+
+- name: Check if lockfile exists (npm)
+  stat:
+    path: "{{ app_dir }}/package-lock.json"
+  register: npm_lockfile
+  when: nodejs_runtime == "node"
 
 - name: Install dependencies with npm
   shell: npm install --production
@@ -22,23 +18,32 @@
   become_user: "{{ app_user }}"
   when: 
     - nodejs_runtime == "node"
-    - has_dependencies.stdout != "0"
+    - npm_lockfile.stat.exists
 
-- name: Install dependencies with Bun
+- name: Install dependencies with Bun (with lockfile)
   shell: /usr/local/bin/bun install --production
   args:
     chdir: "{{ app_dir }}"
   become_user: "{{ app_user }}"
   when: 
     - nodejs_runtime == "bun"
-    - has_dependencies.stdout != "0"
+    - bun_lockfile.stat.exists
 
-- name: Create empty lockfile for Bun when no dependencies
+- name: Create lockfile and install with Bun (no existing lockfile)
   shell: /usr/local/bin/bun install
   args:
     chdir: "{{ app_dir }}"
   become_user: "{{ app_user }}"
   when: 
     - nodejs_runtime == "bun"
-    - has_dependencies.stdout == "0"
+    - not bun_lockfile.stat.exists
+
+- name: Create lockfile with npm (no existing lockfile)
+  shell: npm install --package-lock-only
+  args:
+    chdir: "{{ app_dir }}"
+  become_user: "{{ app_user }}"
+  when: 
+    - nodejs_runtime == "node"
+    - not npm_lockfile.stat.exists
 

@@ -13,11 +13,11 @@ BLUE='\033[0;34m'
 CYAN='\033[0;36m'
 NC='\033[0m' # No Color
 
-log_info() { echo -e "${GREEN}[INFO]${NC} $1"; }
-log_warn() { echo -e "${YELLOW}[WARN]${NC} $1"; }
-log_error() { echo -e "${RED}[ERROR]${NC} $1"; }
-log_step() { echo -e "${BLUE}[STEP]${NC} $1"; }
-log_type() { echo -e "${CYAN}[TYPE]${NC} $1"; }
+log_info() { echo -e "${GREEN}[INFO]${NC} $1" >&2; }
+log_warn() { echo -e "${YELLOW}[WARN]${NC} $1" >&2; }
+log_error() { echo -e "${RED}[ERROR]${NC} $1" >&2; }
+log_step() { echo -e "${BLUE}[STEP]${NC} $1" >&2; }
+log_type() { echo -e "${CYAN}[TYPE]${NC} $1" >&2; }
 
 # Proxmox API functions
 fetch_proxmox_nodes() {
