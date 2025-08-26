@@ -4,17 +4,44 @@ runtime_name: "Node.js/Bun.js"
 
 # Runtime installation tasks
 runtime_install:
-  - name: "Install Node.js runtime"
+  - name: "Install prerequisites for Node.js LTS"
     apt:
       name:
-        - nodejs
-        - npm
+        - ca-certificates
+        - curl
+        - gnupg
+      state: present
+      update_cache: yes
+    when: nodejs_runtime == "node"
+  
+  - name: "Add NodeSource GPG key"
+    shell: |
+      curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key | gpg --dearmor -o /etc/apt/keyrings/nodesource.gpg
+    args:
+      creates: /etc/apt/keyrings/nodesource.gpg
+    when: nodejs_runtime == "node"
+  
+  - name: "Add NodeSource repository for Node.js LTS"
+    shell: |
+      echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_20.x nodistro main" | tee /etc/apt/sources.list.d/nodesource.list
+    args:
+      creates: /etc/apt/sources.list.d/nodesource.list
+    when: nodejs_runtime == "node"
+  
+  - name: "Update apt cache after adding NodeSource repository"
+    apt:
+      update_cache: yes
+    when: nodejs_runtime == "node"
+  
+  - name: "Install Node.js LTS runtime"
+    apt:
+      name: nodejs
       state: present
     when: nodejs_runtime == "node"
   
   - name: "Install Bun runtime system-wide"
     shell: |
-      curl -fsSL https://bun.sh/install | bash -s "bun-v1.0.20"
+      curl -fsSL https://bun.sh/install | bash
       cp /root/.bun/bin/bun /usr/local/bin/bun
       chmod 755 /usr/local/bin/bun
       chown root:root /usr/local/bin/bun

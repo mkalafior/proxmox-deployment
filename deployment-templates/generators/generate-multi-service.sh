@@ -42,6 +42,11 @@ fetch_proxmox_nodes() {
         exit 1
     fi
 
+    if [[ -z "$response" ]]; then
+        log_error "Empty response from Proxmox API"
+        exit 1
+    fi
+
     if command -v jq >/dev/null 2>&1; then
         echo "$response" | jq -r '.data[] | "\(.node)"' 2>/dev/null || echo ""
     else
@@ -137,12 +142,12 @@ select_proxmox_node() {
         return 0
     fi
 
-    echo ""
-    echo "Available Proxmox nodes:"
+    echo "" >&2
+    echo "Available Proxmox nodes:" >&2
     for i in "${!node_array[@]}"; do
-        echo "  $((i+1)). ${node_array[$i]}"
+        echo "  $((i+1)). ${node_array[$i]}" >&2
     done
-    echo ""
+    echo "" >&2
 
     local choice
     while true; do
@@ -151,7 +156,7 @@ select_proxmox_node() {
             echo "${node_array[$((choice-1))]}"
             return 0
         else
-            echo "Invalid choice. Please select a number between 1 and ${#node_array[@]}."
+            echo "Invalid choice. Please select a number between 1 and ${#node_array[@]}." >&2
         fi
     done
 }
@@ -889,6 +894,7 @@ if [[ -n "$SERVICE_TYPE" ]]; then
         "$SERVICE_NAME" \
         --vm-id "$VM_ID" \
         --port "$APP_PORT" \
+        --node "$PROXMOX_NODE" \
         $( [[ -n "$APP_SUBDOMAIN" ]] && printf "%s %q" --subdomain "$APP_SUBDOMAIN" ) \
         --hostname "$SERVICE_HOSTNAME" \
         --cores "$VM_CORES" \
@@ -901,6 +907,7 @@ else
         "$SERVICE_NAME" \
         --vm-id "$VM_ID" \
         --port "$APP_PORT" \
+        --node "$PROXMOX_NODE" \
         $( [[ -n "$APP_SUBDOMAIN" ]] && printf "%s %q" --subdomain "$APP_SUBDOMAIN" ) \
         --hostname "$SERVICE_HOSTNAME" \
         --cores "$VM_CORES" \

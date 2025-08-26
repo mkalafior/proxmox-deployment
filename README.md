@@ -28,7 +28,8 @@ proxmox-deploy-playground/
 ├── global-config/              # Global configuration
 │   ├── env.proxmox.global      # Global Proxmox settings
 │   └── deployment-defaults.yml # Default values
-└── manage-services.sh          # Multi-service management
+└── tools/
+    └── proxmox-deploy          # CLI tool (installed as pxdcli)
 ```
 
 ## 🚀 Supported Service Types

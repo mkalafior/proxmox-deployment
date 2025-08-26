@@ -18,7 +18,7 @@ echo "========================="
 echo ""
 
 # Check if we're in the right directory
-if [[ ! -f "manage-services.sh" ]]; then
+if [[ ! -d "deployment-templates" ]]; then
     echo "❌ Please run this script from the project root directory"
     exit 1
 fi
