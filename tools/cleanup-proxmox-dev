@@ -174,6 +174,51 @@ get_all_containers_from_all_nodes() {
   echo "$all_containers_json"
 }
 
+# Function to check container status
+check_container_status() {
+  local vmid="$1"
+  local node="$2"
+  
+  local status_response
+  status_response=$(proxmox_api "GET" "/nodes/${node}/lxc/${vmid}/status/current" 2>/dev/null)
+  
+  if [[ $? -eq 0 ]] && echo "$status_response" | jq . >/dev/null 2>&1; then
+    echo "$status_response" | jq -r '.data.status // "unknown"'
+  else
+    echo "unknown"
+  fi
+}
+
+# Function to wait for container to stop
+wait_for_container_stop() {
+  local vmid="$1"
+  local node="$2"
+  local max_wait=30  # Maximum wait time in seconds
+  local wait_time=0
+  
+  echo "   ⏳ Waiting for container $vmid to stop..."
+  
+  while [[ $wait_time -lt $max_wait ]]; do
+    local current_status
+    current_status=$(check_container_status "$vmid" "$node")
+    
+    if [[ "$current_status" == "stopped" ]]; then
+      echo "   ✅ Container $vmid is now stopped"
+      return 0
+    elif [[ "$current_status" == "unknown" ]]; then
+      echo "   ⚠️  Unable to check container status"
+      return 1
+    fi
+    
+    sleep 2
+    wait_time=$((wait_time + 2))
+    echo "   ⏳ Still waiting... (${wait_time}s/${max_wait}s) Status: $current_status"
+  done
+  
+  echo "   ❌ Timeout: Container $vmid did not stop within ${max_wait} seconds"
+  return 1
+}
+
 # Function to filter containers by tag
 filter_containers_by_tag() {
   local containers_json="$1"
@@ -205,16 +250,28 @@ stop_container() {
       result=$(proxmox_api "POST" "/nodes/${node}/lxc/${vmid}/status/stop" 2>&1)
       if [[ $? -eq 0 ]]; then
         echo "   ✅ Stop command sent successfully"
-        # Wait a moment for the container to stop
-        sleep 3
+        # Wait and verify the container has actually stopped
+        if wait_for_container_stop "$vmid" "$node"; then
+          return 0
+        else
+          echo "   ❌ Container failed to stop properly"
+          return 1
+        fi
       else
-        echo "   ⚠️  Warning: Stop command may have failed: $result"
+        echo "   ❌ Stop command failed: $result"
+        return 1
       fi
     else
       echo "   🔍 [DRY RUN] Would stop container $vmid on node $node"
+      return 0
     fi
+  elif [[ "$status" == "stopped" ]]; then
+    echo "⏸️  Container $vmid ($name) is already stopped"
+    return 0
   else
-    echo "⏸️  Container $vmid ($name) is already $status"
+    echo "⏸️  Container $vmid ($name) is in state: $status"
+    # For non-running containers, we can proceed to removal
+    return 0
   fi
 }
 
@@ -223,6 +280,20 @@ remove_container() {
   local vmid="$1"
   local name="$2"
   local node="$3"
+  
+  # Double-check container status before removal
+  if [[ "$DRY_RUN" == "false" ]]; then
+    echo "🔍 Verifying container $vmid is stopped before removal..."
+    local current_status
+    current_status=$(check_container_status "$vmid" "$node")
+    
+    if [[ "$current_status" != "stopped" ]]; then
+      echo "   ❌ Cannot remove container: status is '$current_status', not 'stopped'"
+      echo "   💡 Container must be stopped before it can be removed"
+      return 1
+    fi
+    echo "   ✅ Container status confirmed: stopped"
+  fi
   
   echo "🗑️  Removing container $vmid ($name) from node $node..."
   if [[ "$DRY_RUN" == "false" ]]; then
