@@ -368,18 +368,25 @@ EOF
         done
     fi
     
-    # Generate deploy.yml using Python template merger
-    local deploy_template="$TEMPLATES_BASE/base/deploy.yml.j2"
+    # Generate deploy.yml - check for service-specific template first
+    local service_deploy_template="$TEMPLATES_BASE/service-types/$SERVICE_TYPE/deploy.yml.j2"
+    local base_deploy_template="$TEMPLATES_BASE/base/deploy.yml.j2"
     local merge_script="$SCRIPT_DIR/merge_templates.py"
-    if [[ -f "$deploy_template" && -f "$merge_script" ]]; then
-        if python3 "$merge_script" "$deploy_template" "$TEMPLATES_BASE/service-types/$SERVICE_TYPE" "$DEPLOYMENT_DIR/deploy.yml" "$SERVICE_NAME"; then
+    
+    if [[ -f "$service_deploy_template" ]]; then
+        # Use service-specific deploy template directly (copy as-is, uses Ansible variables)
+        cp "$service_deploy_template" "$DEPLOYMENT_DIR/deploy.yml"
+        log_info "Created deploy.yml (service-specific template)"
+    elif [[ -f "$base_deploy_template" && -f "$merge_script" ]]; then
+        # Use base template with merger for other service types
+        if python3 "$merge_script" "$base_deploy_template" "$TEMPLATES_BASE/service-types/$SERVICE_TYPE" "$DEPLOYMENT_DIR/deploy.yml" "$SERVICE_NAME"; then
             log_info "Created merged deploy.yml"
         else
             log_warn "Template merging failed, using base template"
-            cp "$deploy_template" "$DEPLOYMENT_DIR/deploy.yml"
+            cp "$base_deploy_template" "$DEPLOYMENT_DIR/deploy.yml"
         fi
-    elif [[ -f "$deploy_template" ]]; then
-        cp "$deploy_template" "$DEPLOYMENT_DIR/deploy.yml"
+    elif [[ -f "$base_deploy_template" ]]; then
+        cp "$base_deploy_template" "$DEPLOYMENT_DIR/deploy.yml"
         log_info "Created deploy.yml (no merger available)"
     fi
     
@@ -445,6 +452,20 @@ EOF
             cp "$redeploy_template" "$DEPLOYMENT_DIR/redeploy.yml"
             log_info "Created redeploy.yml (no merger available)"
         fi
+    fi
+    
+    # Generate cleanup.yml using Python template merger
+    local cleanup_template="$TEMPLATES_BASE/base/cleanup.yml.j2"
+    if [[ -f "$cleanup_template" && -f "$merge_script" ]]; then
+        if python3 "$merge_script" "$cleanup_template" "$TEMPLATES_BASE/service-types/$SERVICE_TYPE" "$DEPLOYMENT_DIR/cleanup.yml" "$SERVICE_NAME"; then
+            log_info "Created merged cleanup.yml"
+        else
+            log_warn "Cleanup template merging failed, using base template"
+            cp "$cleanup_template" "$DEPLOYMENT_DIR/cleanup.yml"
+        fi
+    elif [[ -f "$cleanup_template" ]]; then
+        cp "$cleanup_template" "$DEPLOYMENT_DIR/cleanup.yml"
+        log_info "Created cleanup.yml (no merger available)"
     fi
     
     # Create deployment scripts

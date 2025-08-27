@@ -1,5 +1,5 @@
 ---
-# Deployment playbook for {{ service_name }} database service
+# Database deployment playbook for {{ service_name }}
 - name: Deploy {{ service_name }} to Proxmox VE
   hosts: localhost
   connection: local
@@ -8,23 +8,9 @@
     - ../global-config.yml
     - service-config.yml
   
+  vars:
+    health_check_path: "/"
   tasks:
-    - name: Check if container already exists
-      uri:
-        url: "https://{{ proxmox_host }}:8006/api2/json/nodes/{{ proxmox_node }}/lxc/{{ vm_id }}/status/current"
-        method: GET
-        headers:
-          Authorization: "PVEAPIToken={{ proxmox_token_id }}={{ proxmox_token_secret }}"
-        validate_certs: "{{ proxmox_api_validate_certs }}"
-        status_code: [200, 404]
-        return_content: yes
-      register: ct_exists_result
-      failed_when: false
-
-    - name: Set container existence fact
-      set_fact:
-        container_exists: "{{ ct_exists_result.status | default(0) == 200 }}"
-
     - name: Validate environment variables
       assert:
         that:
@@ -36,6 +22,37 @@
              proxmox_password is defined and proxmox_password != "")
         fail_msg: |
           Required Proxmox authentication must be configured.
+          Either set API token (TOKEN_ID, TOKEN_SECRET) or username/password (PROXMOX_USER, PROXMOX_PASSWORD).
+          API tokens are recommended for automation.
+
+    - name: Debug configuration
+      debug:
+        msg: |
+          Configuration Debug for {{ service_name }}:
+          - PROXMOX_HOST: {{ proxmox_host }}
+          - PROXMOX_USER: {{ proxmox_user }}
+          - TOKEN_ID: {{ proxmox_token_id | default('not set') }}
+          - TOKEN_SECRET: {{ 'SET' if proxmox_token_secret != '' else 'not set' }}
+          
+          Service Configuration:
+          - Service Name: {{ service_name }}
+          - VM ID: {{ vm_id }}
+          - VM Name: {{ vm_name }}
+          - App Port: {{ app_port }}
+
+    - name: Display authentication method
+      debug:
+        msg: |
+          Using {{ 'API Token' if (proxmox_token_id != '' and proxmox_token_secret != '') else 'Username/Password' }} authentication
+
+    - name: Display container tags
+      debug:
+        msg: |
+          Container will be created with tags: {{ (container_tags + ([project_tag] if project_tag != '' else [])) | join(',') }}
+          📋 Tags breakdown:
+          {% for tag in container_tags %}- {{ tag }}{% endfor %}
+          {% if project_tag != '' %}- {{ project_tag }} (project tag){% endif %}
+          {% if project_tag == '' %}💡 Set PROJECT_TAG environment variable to add a project-specific tag{% endif %}
 
     - name: Check for SSH public key
       stat:
@@ -46,291 +63,88 @@
       openssh_keypair:
         path: "{{ ssh_public_key_path | replace('.pub', '') }}"
         type: ed25519
+        comment: "proxmox-{{ vm_name }}-{{ ansible_date_time.date }}"
       when: not ssh_key_stat.stat.exists
 
     - name: Read SSH public key
       slurp:
         src: "{{ ssh_public_key_path }}"
       register: ssh_public_key_content
+      when: ssh_public_key_path is defined
 
-    - name: Create Proxmox container via API
+    - name: Install Ansible collections from requirements.yml (idempotent)
+      command: ansible-galaxy collection install -r requirements.yml --force
+      args:
+        chdir: "{{ playbook_dir }}"
+      changed_when: false
+      delegate_to: localhost
+      run_once: true
+      become: false
+
+    - name: Debug Proxmox API request details
+      debug:
+        msg: |
+          🔍 Proxmox API Request Details:
+          URL: https://{{ proxmox_host }}:8006/api2/json/nodes/{{ proxmox_node }}/lxc
+          Method: POST
+          VM ID: {{ vm_id }}
+          Node: {{ proxmox_node }}
+          Template: {{ vm_os_template }}
+          Storage: {{ vm_storage }}:{{ vm_disk_size }}
+          Resources: {{ vm_cores }}C/{{ vm_memory }}MB/{{ vm_swap }}MB swap
+          Network: {{ vm_network_bridge }}
+          Tags: {{ (container_tags + ([project_tag] if project_tag != '' else [])) | join(',') }}
+
+    # CONTAINER MANAGEMENT - Use shared tasks to eliminate duplication
+    - name: Set container tags for creation
+      set_fact:
+        container_tags_combined: "{{ (container_tags + ([project_tag] if project_tag != '' else [])) | join(',') }}"
+
+    - name: Execute container management tasks (creation, startup, IP discovery)
+      include_tasks: templates/container_management_tasks.yml
+
+    # Note: We no longer persist IPs locally; use DNS/Proxmox API via CLI
+
+    - name: Detect local custom deployment script
+      stat:
+        path: "{{ playbook_dir }}/scripts/custom_script.sh"
+      register: local_custom_script
+      become: false
+
+    - name: Copy custom deployment script to temporary location
+      copy:
+        src: "{{ playbook_dir }}/scripts/custom_script.sh"
+        dest: "/tmp/{{ service_name }}-custom_script.sh"
+        mode: '0755'
+      when: local_custom_script.stat.exists
+      become: false
+
+    - name: Create application tar archive on localhost
       shell: |
-        curl -k -X POST \
-          -H "Authorization: PVEAPIToken={{ proxmox_token_id }}={{ proxmox_token_secret }}" \
-          -H "Content-Type: application/x-www-form-urlencoded" \
-          -d "vmid={{ vm_id }}&unprivileged=1&features=nesting%3D1&password={{ (lookup('password', '/tmp/vm_root_password chars=ascii_letters,digits length=16')) | urlencode }}&ssh-public-keys={{ ssh_public_key_content.content | b64decode | trim | urlencode }}&ostemplate={{ vm_os_template | urlencode }}&rootfs={{ (vm_storage ~ ':' ~ vm_disk_size) | urlencode }}&cores={{ vm_cores }}&memory={{ vm_memory }}&swap={{ vm_swap }}&net0={{ ('name=eth0,bridge=' ~ vm_network_bridge ~ ',firewall=1,ip=dhcp') | urlencode }}&tags={{ container_tags_string | urlencode }}" \
-          "https://{{ proxmox_host }}:8006/api2/json/nodes/{{ proxmox_node }}/lxc"
-      register: proxmox_vm
-      failed_when: false
-      when: not (container_exists | default(false))
-
-    - name: Debug container creation response
-      debug:
-        var: proxmox_vm
-        verbosity: 1
-      when: not (container_exists | default(false))
-
-    - name: Check if container creation was successful
-      fail:
-        msg: |
-          Container creation failed!
-
-          API Response: {{ proxmox_vm.stdout | default('No response') }}
-          Error Details: {{ proxmox_vm.stderr | default('No error details') }}
-          Return Code: {{ proxmox_vm.rc | default('Unknown') }}
-
-          Troubleshooting Tips:
-          1. Check if OS template exists: {{ vm_os_template }}
-          2. Verify Proxmox node name: {{ proxmox_node }}
-          3. Ensure storage '{{ vm_storage }}' exists and has space
-          4. Check API token permissions for VM creation
-          5. Verify VM ID {{ vm_id }} is not already in use
-
-          Run the debug script: ./tools/proxmox-debug.sh
-      when:
-        - not (container_exists | default(false))
-        - proxmox_vm.rc != 0 or (proxmox_vm.stdout | default('')) == '' or ((proxmox_vm.stdout | from_json).data is not defined)
-
-    - name: Extract UPID from successful container creation
-      set_fact:
-        container_upid: "{{ (proxmox_vm.stdout | from_json).data }}"
-      when:
-        - not (container_exists | default(false))
-        - proxmox_vm.rc == 0
-        - (proxmox_vm.stdout | from_json).data is defined
-
-    - name: Start the container (idempotent)
-      uri:
-        url: "https://{{ proxmox_host }}:8006/api2/json/nodes/{{ proxmox_node }}/lxc/{{ vm_id }}/status/start"
-        method: POST
-        headers:
-          Authorization: "PVEAPIToken={{ proxmox_token_id }}={{ proxmox_token_secret }}"
-        validate_certs: "{{ proxmox_api_validate_certs }}"
-        status_code: [200, 500]
-        timeout: 60
-      register: start_result
-      failed_when: false
-      changed_when: "start_result.status == 200"
-
-    # Progressive backoff attempts for slow PVE clusters (20, 30, 30, 60, 60)
-    - name: Backoff attempt 1 - wait 20s
-      pause:
-        seconds: 20
-      when: (container_ip | default('')) == ''
-
-    - name: Query interfaces after attempt 1
-      uri:
-        url: "https://{{ proxmox_host }}:8006/api2/json/nodes/{{ proxmox_node }}/lxc/{{ vm_id }}/interfaces"
-        method: GET
-        headers:
-          Authorization: "PVEAPIToken={{ proxmox_token_id }}={{ proxmox_token_secret }}"
-        validate_certs: "{{ proxmox_api_validate_certs }}"
-        return_content: yes
-        status_code: [200, 401, 403, 500]
-      register: container_interfaces_result
-      failed_when: false
-      when: (container_ip | default('')) == ''
-
-    - name: Set container IP after attempt 1
-      set_fact:
-        container_ip: "{{ (eth0_interface.inet | default('')) | regex_replace('/.*$', '') }}"
-      vars:
-        eth0_interface: "{{ container_interfaces_result.json.data | selectattr('name', 'equalto', 'eth0') | first }}"
-      when:
-        - (container_ip | default('')) == ''
-        - container_interfaces_result is defined
-        - container_interfaces_result.json is defined
-        - container_interfaces_result.json.data is defined
-        - (container_interfaces_result.json.data | selectattr('name','equalto','eth0') | list | length) > 0
-
-    - name: Backoff attempt 2 - wait 30s
-      pause:
-        seconds: 30
-      when: (container_ip | default('')) == ''
-
-    - name: Query interfaces after attempt 2
-      uri:
-        url: "https://{{ proxmox_host }}:8006/api2/json/nodes/{{ proxmox_node }}/lxc/{{ vm_id }}/interfaces"
-        method: GET
-        headers:
-          Authorization: "PVEAPIToken={{ proxmox_token_id }}={{ proxmox_token_secret }}"
-        validate_certs: "{{ proxmox_api_validate_certs }}"
-        return_content: yes
-        status_code: [200, 401, 403, 500]
-      register: container_interfaces_result
-      failed_when: false
-      when: (container_ip | default('')) == ''
-
-    - name: Set container IP after attempt 2
-      set_fact:
-        container_ip: "{{ (eth0_interface.inet | default('')) | regex_replace('/.*$', '') }}"
-      vars:
-        eth0_interface: "{{ container_interfaces_result.json.data | selectattr('name', 'equalto', 'eth0') | first }}"
-      when:
-        - (container_ip | default('')) == ''
-        - container_interfaces_result is defined
-        - container_interfaces_result.json is defined
-        - container_interfaces_result.json.data is defined
-        - (container_interfaces_result.json.data | selectattr('name','equalto','eth0') | list | length) > 0
-
-    - name: Backoff attempt 3 - wait 30s
-      pause:
-        seconds: 30
-      when: (container_ip | default('')) == ''
-
-    - name: Query interfaces after attempt 3
-      uri:
-        url: "https://{{ proxmox_host }}:8006/api2/json/nodes/{{ proxmox_node }}/lxc/{{ vm_id }}/interfaces"
-        method: GET
-        headers:
-          Authorization: "PVEAPIToken={{ proxmox_token_id }}={{ proxmox_token_secret }}"
-        validate_certs: "{{ proxmox_api_validate_certs }}"
-        return_content: yes
-        status_code: [200, 401, 403, 500]
-      register: container_interfaces_result
-      failed_when: false
-      when: (container_ip | default('')) == ''
-
-    - name: Set container IP after attempt 3
-      set_fact:
-        container_ip: "{{ (eth0_interface.inet | default('')) | regex_replace('/.*$', '') }}"
-      vars:
-        eth0_interface: "{{ container_interfaces_result.json.data | selectattr('name', 'equalto', 'eth0') | first }}"
-      when:
-        - (container_ip | default('')) == ''
-        - container_interfaces_result is defined
-        - container_interfaces_result.json is defined
-        - container_interfaces_result.json.data is defined
-        - (container_interfaces_result.json.data | selectattr('name','equalto','eth0') | list | length) > 0
-
-    - name: Backoff attempt 4 - wait 60s
-      pause:
-        seconds: 60
-      when: (container_ip | default('')) == ''
-
-    - name: Query interfaces after attempt 4
-      uri:
-        url: "https://{{ proxmox_host }}:8006/api2/json/nodes/{{ proxmox_node }}/lxc/{{ vm_id }}/interfaces"
-        method: GET
-        headers:
-          Authorization: "PVEAPIToken={{ proxmox_token_id }}={{ proxmox_token_secret }}"
-        validate_certs: "{{ proxmox_api_validate_certs }}"
-        return_content: yes
-        status_code: [200, 401, 403, 500]
-      register: container_interfaces_result
-      failed_when: false
-      when: (container_ip | default('')) == ''
-
-    - name: Set container IP after attempt 4
-      set_fact:
-        container_ip: "{{ (eth0_interface.inet | default('')) | regex_replace('/.*$', '') }}"
-      vars:
-        eth0_interface: "{{ container_interfaces_result.json.data | selectattr('name', 'equalto', 'eth0') | first }}"
-      when:
-        - (container_ip | default('')) == ''
-        - container_interfaces_result is defined
-        - container_interfaces_result.json is defined
-        - container_interfaces_result.json.data is defined
-        - (container_interfaces_result.json.data | selectattr('name','equalto','eth0') | list | length) > 0
-
-    - name: Backoff attempt 5 - wait 60s
-      pause:
-        seconds: 60
-      when: (container_ip | default('')) == ''
-
-    - name: Query interfaces after attempt 5
-      uri:
-        url: "https://{{ proxmox_host }}:8006/api2/json/nodes/{{ proxmox_node }}/lxc/{{ vm_id }}/interfaces"
-        method: GET
-        headers:
-          Authorization: "PVEAPIToken={{ proxmox_token_id }}={{ proxmox_token_secret }}"
-        validate_certs: "{{ proxmox_api_validate_certs }}"
-        return_content: yes
-        status_code: [200, 401, 403, 500]
-      register: container_interfaces_result
-      failed_when: false
-      when: (container_ip | default('')) == ''
-
-    - name: Set container IP after attempt 5
-      set_fact:
-        container_ip: "{{ (eth0_interface.inet | default('')) | regex_replace('/.*$', '') }}"
-      vars:
-        eth0_interface: "{{ container_interfaces_result.json.data | selectattr('name', 'equalto', 'eth0') | first }}"
-      when:
-        - (container_ip | default('')) == ''
-        - container_interfaces_result is defined
-        - container_interfaces_result.json is defined
-        - container_interfaces_result.json.data is defined
-        - (container_interfaces_result.json.data | selectattr('name','equalto','eth0') | list | length) > 0
-
-    - name: Extract container IP
-      set_fact:
-        container_ip: "{{ (eth0_interface.inet | default('')) | regex_replace('/.*$', '') }}"
-      vars:
-        eth0_interface: "{{ container_interfaces_result.json.data | selectattr('name', 'equalto', 'eth0') | first }}"
-      when:
-        - container_interfaces_result.json is defined
-        - container_interfaces_result.json.data is defined
-
-    - name: Final attempt - query container status via API
-      uri:
-        url: "https://{{ proxmox_host }}:8006/api2/json/nodes/{{ proxmox_node }}/lxc/{{ vm_id }}/status/current"
-        method: GET
-        headers:
-          Authorization: "PVEAPIToken={{ proxmox_token_id }}={{ proxmox_token_secret }}"
-        validate_certs: "{{ proxmox_api_validate_certs }}"
-        timeout: 30
-        return_content: yes
-        status_code: [200, 401, 403, 500]
-      register: container_status_result
-      failed_when: false
-      when: container_ip is not defined or (container_ip | default('')) == ''
-
-    - name: Debug final IP discovery attempt
-      debug:
-        msg: |
-          Final IP discovery attempt for {{ service_name }} (VM {{ vm_id }}):
-          
-          ⚠️  IP discovery via API failed. This may be due to:
-          - Container still starting up (network not ready)
-          - DHCP lease not yet assigned
-          - Network configuration issues
-          
-          💡 Manual steps to resolve:
-          1. Check container status in Proxmox web interface
-          2. Verify network configuration
-          3. Wait a few minutes and retry deployment
-          
-          🔧 Alternative: SSH directly to container if you know the IP
-      when: 
-        - container_ip is not defined or (container_ip | default('')) == ''
-        - container_status_result is defined
-
-    - name: Fail if IP discovery failed
-      fail:
-        msg: "Could not determine container IP"
-      when: container_ip is not defined or (container_ip | default('')) == ''
-
-    - name: Wait for SSH to become available
-      wait_for:
-        host: "{{ container_ip }}"
-        port: 22
-        timeout: 60
-
-    - name: Add container to dynamic inventory
-      add_host:
-        name: "{{ container_ip }}"
-        groups: proxmox_containers
-        ansible_host: "{{ container_ip }}"
-        ansible_user: root
-        ansible_ssh_private_key_file: "{{ ssh_public_key_path | replace('.pub', '') }}"
-
-    # No longer persisting IP to vm_ip.txt; DNS/Proxmox API will be used by CLI
-
-  handlers:
-    - name: reload systemd
-      systemd:
-        daemon_reload: yes
+        cd {{ local_app_path }}
+        # Check if .deployignore exists and build exclude options
+        EXCLUDE_OPTS=""
+        if [ -f .deployignore ]; then
+          # Read .deployignore and convert to tar exclude options
+          while IFS= read -r line || [ -n "$line" ]; do
+            # Skip empty lines and comments
+            if [[ -n "$line" && ! "$line" =~ ^[[:space:]]*# ]]; then
+              # Remove leading/trailing whitespace
+              line=$(echo "$line" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+              if [[ -n "$line" ]]; then
+                EXCLUDE_OPTS="$EXCLUDE_OPTS --exclude='$line'"
+              fi
+            fi
+          done < .deployignore
+        else
+          # Default exclusions if no .deployignore file
+          EXCLUDE_OPTS="--exclude='node_modules' --exclude='.git' --exclude='deployment' --exclude='deployments' --exclude='*.log' --exclude='.env'"
+        fi
+        
+        # Create tar with dynamic exclusions
+        eval "tar $EXCLUDE_OPTS -czf /tmp/{{ service_name }}-app.tar.gz ."
+      become: false
+      when: container_ip is defined
 
 - name: Configure container and deploy {{ service_name }} database
   hosts: proxmox_containers
@@ -338,24 +152,53 @@
   vars_files:
     - ../global-config.yml
     - service-config.yml
-
+  vars:
+    ansible_ssh_common_args: '-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null'
+    runtime_variant: "{{ database_runtime | default('postgresql') }}"
+    allowed_ports: "{{ default_allowed_ports + [app_port | string] + (additional_ports | default([])) }}"
+  
   tasks:
     - name: Normalize db_type from runtime_variant if undefined
       set_fact:
         db_type: "{{ db_type | default(runtime_variant) | default('postgresql') }}"
 
+    - name: Wait for system to be ready
+      wait_for_connection:
+        timeout: 300
+
+    - name: Test internet connectivity
+      uri:
+        url: http://archive.ubuntu.com
+        timeout: 5
+      register: internet_test
+      ignore_errors: true
+
+    - name: Skip package installation if no internet
+      debug:
+        msg: "No internet access - skipping package installation. Run fix-proxmox-networking.sh on Proxmox host."
+      when: internet_test.failed
+
     - name: Update apt cache
       apt:
         update_cache: yes
         cache_valid_time: 3600
+      when: not internet_test.failed
 
-    - name: Install base packages
+    - name: Install system packages
       apt:
         name:
+          - curl
+          - wget
+          - git
+          - unzip
           - ufw
-          - qemu-guest-agent
+          - build-essential  # For native modules if needed
+          - qemu-guest-agent  # For IP address discovery
         state: present
+      when: not internet_test.failed
 
+    # (collections are installed in the localhost phase above)
+  
     - name: Configure firewall
       ufw:
         rule: allow
@@ -366,6 +209,7 @@
       ufw:
         state: enabled
 
+    # DATABASE-SPECIFIC INSTALLATION
     - name: Install PostgreSQL
       apt:
         name:
@@ -373,14 +217,47 @@
           - postgresql-contrib
           - python3-psycopg2
         state: present
-      when: db_type == 'postgresql'
+      when:
+        - not internet_test.failed
+        - db_type == 'postgresql'
 
+    - name: Install MySQL
+      apt:
+        name:
+          - mysql-server
+          - python3-pymysql
+        state: present
+      when:
+        - not internet_test.failed
+        - db_type == 'mysql'
+
+    - name: Install Redis
+      apt:
+        name: redis-server
+        state: present
+      when:
+        - not internet_test.failed
+        - db_type == 'redis'
+
+    - name: Install MongoDB
+      shell: |
+        wget -qO - https://www.mongodb.org/static/pgp/server-6.0.asc | apt-key add -
+        echo "deb [ arch=amd64,arm64 ] https://repo.mongodb.org/apt/ubuntu jammy/mongodb-org/6.0 multiverse" | tee /etc/apt/sources.list.d/mongodb-org-6.0.list
+        apt-get update
+        apt-get install -y mongodb-org
+      when:
+        - not internet_test.failed
+        - db_type == 'mongodb'
+
+    # DATABASE-SPECIFIC CONFIGURATION
     - name: Ensure PostgreSQL is running
       systemd:
         name: postgresql
         state: started
         enabled: yes
-      when: db_type == 'postgresql'
+      when:
+        - not internet_test.failed
+        - db_type == 'postgresql'
 
     - name: Discover PostgreSQL config directory
       shell: |
@@ -420,63 +297,13 @@
         state: restarted
       when: db_type == 'postgresql'
 
-    - name: Wait for PostgreSQL to listen
+    - name: Wait for PostgreSQL to listen on port
       wait_for:
         host: 127.0.0.1
         port: "{{ app_port }}"
         timeout: 30
         state: started
       when: db_type == 'postgresql'
-
-    # DNS auto-registration (parity with base deploy template)
-    - name: Copy DNS authentication key
-      template:
-        src: bind-key.conf.j2
-        dest: /etc/bind-key.conf
-        mode: '0600'
-        owner: root
-        group: root
-
-    - name: Install netcat for DNS connectivity testing
-      apt:
-        name: netcat-openbsd
-        state: present
-
-    - name: Copy DNS registration script
-      template:
-        src: dns-register.sh.j2
-        dest: /opt/dns-register.sh
-        mode: '0755'
-        owner: root
-        group: root
-
-    - name: Test DNS registration script
-      command: /opt/dns-register.sh test
-      register: dns_test_result
-      ignore_errors: true
-
-    - name: Create DNS registration service
-      template:
-        src: dns-register.service.j2
-        dest: /etc/systemd/system/dns-register.service
-        mode: '0644'
-      notify: reload systemd
-
-    - name: Enable and start DNS registration service
-      systemd:
-        name: dns-register
-        enabled: yes
-        state: started
-        daemon_reload: yes
-
-    - name: Wait for DNS registration to complete
-      pause:
-        seconds: 3
-
-    - name: Test hostname resolution
-      shell: nslookup {{ service_hostname }}.{{ dns_domain }} {{ dns_server }}
-      register: dns_resolution_test
-      ignore_errors: true
 
     - name: Initialize PostgreSQL database
       postgresql_db:
@@ -509,14 +336,7 @@
       become_user: postgres
       when: db_type == 'postgresql'
 
-    - name: Install MySQL
-      apt:
-        name:
-          - mysql-server
-          - python3-pymysql
-        state: present
-      when: db_type == 'mysql'
-
+    # MySQL Configuration
     - name: Ensure MySQL is running
       systemd:
         name: mysql
@@ -524,33 +344,39 @@
         enabled: yes
       when: db_type == 'mysql'
 
-    - name: Initialize MySQL database and user
+    - name: Configure MySQL for remote connections
+      lineinfile:
+        path: /etc/mysql/mysql.conf.d/mysqld.cnf
+        regexp: '^bind-address'
+        line: 'bind-address = 0.0.0.0'
+      when: db_type == 'mysql'
+
+    - name: Restart MySQL to apply config
+      systemd:
+        name: mysql
+        state: restarted
+      when: db_type == 'mysql'
+
+    - name: Create MySQL database
       mysql_db:
         name: "{{ db_name | default(service_name) }}"
         state: present
       when: db_type == 'mysql'
 
-    - name: Create MySQL user with privileges
+    - name: Create MySQL user
       mysql_user:
         name: "{{ db_user | default(service_name) }}"
         password: "{{ db_password }}"
         priv: "{{ db_name | default(service_name) }}.*:ALL"
-        host: "%"
         state: present
       when: db_type == 'mysql'
 
-    - name: Install Redis
-      apt:
-        name: redis-server
-        state: present
-      when: db_type == 'redis'
-
-    - name: Configure Redis to listen on all interfaces
+    # Redis Configuration
+    - name: Configure Redis
       lineinfile:
         path: /etc/redis/redis.conf
         regexp: '^bind'
         line: 'bind 0.0.0.0'
-      notify: restart redis
       when: db_type == 'redis'
 
     - name: Ensure Redis is running
@@ -560,30 +386,279 @@
         enabled: yes
       when: db_type == 'redis'
 
-    - name: Install MongoDB (apt repo)
-      shell: |
-        wget -qO - https://www.mongodb.org/static/pgp/server-6.0.asc | apt-key add -
-        echo "deb [ arch=amd64,arm64 ] https://repo.mongodb.org/apt/ubuntu jammy/mongodb-org/6.0 multiverse" | tee /etc/apt/sources.list.d/mongodb-org-6.0.list
-        apt-get update
-        apt-get install -y mongodb-org
-      args:
-        warn: false
-      when: db_type == 'mongodb'
-
-    - name: Ensure mongod is running
+    # MongoDB Configuration
+    - name: Ensure MongoDB is running
       systemd:
         name: mongod
         state: started
         enabled: yes
       when: db_type == 'mongodb'
 
+    - name: Configure MongoDB for remote connections
+      lineinfile:
+        path: /etc/mongod.conf
+        regexp: '^  bindIp:'
+        line: '  bindIp: 0.0.0.0'
+      when: db_type == 'mongodb'
+
+    - name: Restart MongoDB to apply config
+      systemd:
+        name: mongod
+        state: restarted
+      when: db_type == 'mongodb'
+
+    - name: Create application user
+      user:
+        name: "{{ app_user }}"
+        system: yes
+        shell: /bin/bash
+        home: "{{ app_dir }}"
+        create_home: yes
+
+    - name: Create application directory
+      file:
+        path: "{{ app_dir }}"
+        state: directory
+        owner: "{{ app_user }}"
+        group: "{{ app_user }}"
+        mode: '0755'
+
+    - name: Upload custom deployment script to container
+      copy:
+        src: "/tmp/{{ service_name }}-custom_script.sh"
+        dest: "/opt/custom_script.sh"
+        mode: '0755'
+        owner: root
+        group: root
+      when: hostvars['localhost']['local_custom_script'].stat.exists
+
+    - name: Run custom deployment script (service-specific hook)
+      shell: "/opt/custom_script.sh"
+      args:
+        chdir: "{{ app_dir }}"
+      become_user: "{{ app_user }}"
+      environment:
+        APP_DIR: "{{ app_dir }}"
+        SERVICE_TYPE: "{{ service_type | default('') }}"
+        APP_PORT: "{{ app_port | string }}"
+        SERVICE_NAME: "{{ service_name }}"
+        DB_TYPE: "{{ db_type }}"
+        DB_NAME: "{{ db_name | default(service_name) }}"
+        DB_USER: "{{ db_user | default(service_name) }}"
+        DB_PASSWORD: "{{ db_password }}"
+      register: custom_script_result
+      changed_when: false
+      failed_when: false
+      when: hostvars['localhost']['local_custom_script'].stat.exists
+
+    - name: Show custom script output
+      debug:
+        var: custom_script_result.stdout_lines
+      when: hostvars['localhost']['local_custom_script'].stat.exists
+
+    - name: Copy DNS authentication key
+      template:
+        src: bind-key.conf.j2
+        dest: /etc/bind-key.conf
+        mode: '0600'
+        owner: root
+        group: root
+
+    - name: Install netcat for DNS connectivity testing
+      apt:
+        name: netcat-openbsd
+        state: present
+
+    - name: Copy DNS registration script
+      template:
+        src: dns-register.sh.j2
+        dest: /opt/dns-register.sh
+        mode: '0755'
+        owner: root
+        group: root
+
+    - name: Test DNS registration script
+      command: /opt/dns-register.sh test
+      register: dns_test_result
+      ignore_errors: true
+
+    - name: Display DNS test result
+      debug:
+        msg: |
+          DNS Test Result for {{ service_name }}:
+          rc: {{ dns_test_result.rc | default('n/a') }}
+          stdout: {{ dns_test_result.stdout | default('') }}
+          stderr: {{ dns_test_result.stderr | default('') }}
+
+    - name: Create DNS registration service
+      template:
+        src: dns-register.service.j2
+        dest: /etc/systemd/system/dns-register.service
+        mode: '0644'
+      notify: reload systemd
+
+    - name: Enable and start DNS registration service
+      systemd:
+        name: dns-register
+        enabled: yes
+        state: started
+        daemon_reload: yes
+
+    - name: Wait for DNS registration to complete
+      pause:
+        seconds: 3
+
+    - name: Test hostname resolution
+      shell: nslookup {{ service_hostname }}.{{ dns_domain }} {{ dns_server }}
+      register: dns_resolution_test
+      ignore_errors: true
+
+    - name: Display DNS resolution result
+      debug:
+        msg: |
+          DNS Resolution Test for {{ service_name }}:
+          rc: {{ dns_resolution_test.rc | default('n/a') }}
+          stdout: {{ dns_resolution_test.stdout | default('') }}
+          stderr: {{ dns_resolution_test.stderr | default('') }}
+
+    # Cloudflare Tunnel Configuration (if enabled)
+    - name: Check if Cloudflare domain is configured
+      set_fact:
+        cloudflare_enabled: "{{ cloudflare_domain is defined and cloudflare_domain != '' }}"
+      
+    - name: Configure Cloudflare tunnel routing
+      block:
+        - name: Get tunnel UUID
+          shell: cloudflared tunnel list | grep 'proxmox-main' | awk '{print $1}'
+          register: tunnel_uuid_result
+          delegate_to: "{{ proxmox_host }}"
+          
+        - name: Set tunnel UUID fact
+          set_fact:
+            tunnel_uuid: "{{ tunnel_uuid_result.stdout.strip() }}"
+            
+        - name: Backup current tunnel configuration
+          copy:
+            src: /etc/cloudflared/config.yml
+            dest: "/etc/cloudflared/config.yml.backup.{{ ansible_date_time.date }}_{{ ansible_date_time.hour }}{{ ansible_date_time.minute }}{{ ansible_date_time.second }}"
+            remote_src: yes
+          delegate_to: "{{ proxmox_host }}"
+          
+        - name: Generate new tunnel configuration
+          template:
+            src: cloudflare-tunnel-config.yml.j2
+            dest: /tmp/new_tunnel_config.yml
+          run_once: true
+          
+        - name: Upload new tunnel configuration
+          copy:
+            src: /tmp/new_tunnel_config.yml
+            dest: /etc/cloudflared/config.yml
+          delegate_to: "{{ proxmox_host }}"
+          run_once: true
+          
+        - name: Clean up temporary config file
+          file:
+            path: /tmp/new_tunnel_config.yml
+            state: absent
+          run_once: true
+          
+        - name: Restart cloudflared service
+          systemd:
+            name: cloudflared
+            state: restarted
+          delegate_to: "{{ proxmox_host }}"
+          
+        - name: Wait for cloudflared to restart
+          pause:
+            seconds: 5
+            
+        - name: Create DNS route for tunnel
+          shell: cloudflared tunnel route dns proxmox-main {{ app_subdomain }}.{{ cloudflare_domain }}
+          delegate_to: "{{ proxmox_host }}"
+          ignore_errors: true
+            
+        - name: Verify cloudflared service status
+          systemd:
+            name: cloudflared
+          register: cloudflared_status
+          delegate_to: "{{ proxmox_host }}"
+          
+        - name: Display Cloudflare tunnel status
+          debug:
+            msg: |
+              Cloudflare Tunnel Status:
+              Service: {{ cloudflared_status.status.ActiveState }}
+              Public URL: https://{{ app_subdomain }}.{{ cloudflare_domain }}
+              
+      when: cloudflare_enabled | bool
+
+    # DATABASE STATUS CHECKS
+    - name: Test database connectivity
+      block:
+        - name: Test PostgreSQL connection
+          postgresql_ping:
+            db: "{{ db_name | default(service_name) }}"
+            login_host: "127.0.0.1"
+            login_port: "{{ app_port }}"
+            login_user: "{{ db_user | default(service_name) }}"
+            login_password: "{{ db_password }}"
+          register: pg_connection_test
+          when: db_type == 'postgresql'
+
+        - name: Test MySQL connection
+          mysql_info:
+            login_host: "127.0.0.1"
+            login_port: "{{ app_port }}"
+            login_user: "{{ db_user | default(service_name) }}"
+            login_password: "{{ db_password }}"
+          register: mysql_connection_test
+          when: db_type == 'mysql'
+
+        - name: Test Redis connection
+          redis:
+            command: ping
+            login_host: "127.0.0.1"
+            login_port: "{{ app_port }}"
+          register: redis_connection_test
+          when: db_type == 'redis'
+
+      ignore_errors: true
+
+    - name: Display database status
+      debug:
+        msg: |
+          {{ service_name }} Database Status:
+          - Type: {{ db_type }}
+          - Host: {{ ansible_host }}:{{ app_port }}
+          - Database: {{ db_name | default(service_name) }}
+          - User: {{ db_user | default(service_name) }}
+          - Connection: {{ 'OK' if (pg_connection_test.is_available | default(false)) or (mysql_connection_test is succeeded) or (redis_connection_test is succeeded) else 'Failed' }}
+
   handlers:
     - name: reload systemd
       systemd:
         daemon_reload: yes
-    - name: restart redis
-      systemd:
-        name: redis-server
-        state: restarted
 
+# Cleanup play - runs on localhost after deployment completes
+- name: Cleanup deployment artifacts
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars_files:
+    - ../global-config.yml
+    - service-config.yml
+  
+  tasks:
+    - name: Clean up local tar file after deployment
+      file:
+        path: "/tmp/{{ service_name }}-app.tar.gz"
+        state: absent
+      become: false
 
+    - name: Clean up temporary custom script
+      file:
+        path: "/tmp/{{ service_name }}-custom_script.sh"
+        state: absent
+      when: hostvars['localhost']['local_custom_script'].stat.exists
+      become: false

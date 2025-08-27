@@ -28,7 +28,7 @@ while [[ $# -gt 0 ]]; do
       echo ""
       echo "Options:"
       echo "  --dry-run    Show what would be done without actually doing it"
-      echo "  --force      Skip confirmation prompt"
+      echo "  --force      Skip all confirmation prompts"
       echo "  --help, -h   Show this help message"
       echo ""
       echo "Environment variables required:"
@@ -114,10 +114,64 @@ proxmox_api() {
   curl "${curl_args[@]}" "https://${PROXMOX_HOST}:8006/api2/json${endpoint}"
 }
 
-# Function to get all containers
-get_all_containers() {
-  echo "🔍 Fetching all containers from Proxmox node '$PROXMOX_NODE'..."
-  proxmox_api "GET" "/nodes/${PROXMOX_NODE}/lxc"
+# Function to get all nodes
+get_all_nodes() {
+  echo "🔍 Fetching all nodes from Proxmox cluster..." >&2
+  proxmox_api "GET" "/nodes"
+}
+
+# Function to list available nodes
+list_available_nodes() {
+  local nodes_json="$1"
+  
+  # Use jq to extract node names and status
+  echo "$nodes_json" | jq -r '
+    .data[] | 
+    select(.type == "node") |
+    "\(.node):\(.status):\(.uptime // 0)"
+  '
+}
+
+# Function to get all containers from a specific node
+get_containers_from_node() {
+  local node="$1"
+  proxmox_api "GET" "/nodes/${node}/lxc"
+}
+
+# Function to get all containers from all online nodes
+get_all_containers_from_all_nodes() {
+  local online_nodes=("$@")
+  local all_containers_json='{"data":[]}'
+  
+  echo "🔍 Fetching LXC containers from all online nodes..." >&2
+  
+  for node in "${online_nodes[@]}"; do
+    echo "   📡 Checking node: $node" >&2
+    
+    local node_containers
+    node_containers=$(get_containers_from_node "$node")
+    
+    if [[ $? -eq 0 ]] && echo "$node_containers" | jq . >/dev/null 2>&1; then
+      # Add node information to each container
+      local containers_with_node
+      containers_with_node=$(echo "$node_containers" | jq --arg node "$node" '
+        .data[] |= (. + {"source_node": $node})
+      ')
+      
+      # Merge the containers
+      all_containers_json=$(echo "$all_containers_json $containers_with_node" | jq -s '
+        .[0].data += .[1].data | .[0]
+      ')
+      
+      local count
+      count=$(echo "$node_containers" | jq '.data | length')
+      echo "      ✅ Found $count LXC containers" >&2
+    else
+      echo "      ⚠️  Failed to fetch LXC containers from node $node" >&2
+    fi
+  done
+  
+  echo "$all_containers_json"
 }
 
 # Function to filter containers by tag
@@ -126,10 +180,14 @@ filter_containers_by_tag() {
   local tag="$2"
   
   # Use jq to filter containers that have the specified tag
+  # Handle both comma and semicolon separated tags
   echo "$containers_json" | jq -r --arg tag "$tag" '
     .data[] | 
-    select(.tags and (.tags | split(",") | map(gsub("^\\s+|\\s+$";"")) | index($tag))) |
-    "\(.vmid):\(.name):\(.status):\(.tags)"
+    select(.tags and (
+      (.tags | split(",") | map(gsub("^\\s+|\\s+$";"")) | index($tag)) or
+      (.tags | split(";") | map(gsub("^\\s+|\\s+$";"")) | index($tag))
+    )) |
+    "\(.vmid):\(.name):\(.status):\(.tags):\(.source_node // "unknown")"
   '
 }
 
@@ -138,12 +196,13 @@ stop_container() {
   local vmid="$1"
   local name="$2"
   local status="$3"
+  local node="$4"
   
   if [[ "$status" == "running" ]]; then
-    echo "⏹️  Stopping container $vmid ($name)..."
+    echo "⏹️  Stopping container $vmid ($name) on node $node..."
     if [[ "$DRY_RUN" == "false" ]]; then
       local result
-      result=$(proxmox_api "POST" "/nodes/${PROXMOX_NODE}/lxc/${vmid}/status/stop" 2>&1)
+      result=$(proxmox_api "POST" "/nodes/${node}/lxc/${vmid}/status/stop" 2>&1)
       if [[ $? -eq 0 ]]; then
         echo "   ✅ Stop command sent successfully"
         # Wait a moment for the container to stop
@@ -152,7 +211,7 @@ stop_container() {
         echo "   ⚠️  Warning: Stop command may have failed: $result"
       fi
     else
-      echo "   🔍 [DRY RUN] Would stop container $vmid"
+      echo "   🔍 [DRY RUN] Would stop container $vmid on node $node"
     fi
   else
     echo "⏸️  Container $vmid ($name) is already $status"
@@ -163,11 +222,12 @@ stop_container() {
 remove_container() {
   local vmid="$1"
   local name="$2"
+  local node="$3"
   
-  echo "🗑️  Removing container $vmid ($name)..."
+  echo "🗑️  Removing container $vmid ($name) from node $node..."
   if [[ "$DRY_RUN" == "false" ]]; then
     local result
-    result=$(proxmox_api "DELETE" "/nodes/${PROXMOX_NODE}/lxc/${vmid}" 2>&1)
+    result=$(proxmox_api "DELETE" "/nodes/${node}/lxc/${vmid}" 2>&1)
     if [[ $? -eq 0 ]]; then
       echo "   ✅ Container removed successfully"
     else
@@ -175,8 +235,89 @@ remove_container() {
       return 1
     fi
   else
-    echo "   🔍 [DRY RUN] Would remove container $vmid"
+    echo "   🔍 [DRY RUN] Would remove container $vmid from node $node"
   fi
+}
+
+# Function to get all online nodes
+get_online_nodes() {
+  local nodes_response
+  nodes_response=$(get_all_nodes)
+  
+  if [[ $? -ne 0 ]]; then
+    echo "⚠️  Warning: Failed to fetch nodes from Proxmox API, using default node '$PROXMOX_NODE'" >&2
+    echo "$PROXMOX_NODE"
+    return 0
+  fi
+  
+  # Check if response is valid JSON
+  if ! echo "$nodes_response" | jq . >/dev/null 2>&1; then
+    echo "⚠️  Warning: Invalid JSON response from nodes API, using default node '$PROXMOX_NODE'" >&2
+    echo "$PROXMOX_NODE"
+    return 0
+  fi
+  
+  # Get available nodes
+  local available_nodes
+  available_nodes=$(list_available_nodes "$nodes_response")
+  
+  if [[ -z "$available_nodes" ]]; then
+    echo "⚠️  Warning: No nodes found, using default node '$PROXMOX_NODE'" >&2
+    echo "$PROXMOX_NODE"
+    return 0
+  fi
+  
+  echo "🖥️  Available Proxmox nodes:" >&2
+  echo "" >&2
+  
+  local online_nodes=()
+  local default_found=false
+  local default_online=false
+  
+  # Parse and display nodes, collect online ones
+  while IFS=':' read -r node status uptime; do
+    if [[ -n "$node" ]]; then
+      local status_icon="❌"
+      local is_online=false
+      if [[ "$status" == "online" ]]; then
+        status_icon="✅"
+        is_online=true
+        online_nodes+=("$node")
+      fi
+      
+      local default_marker=""
+      if [[ "$node" == "$PROXMOX_NODE" ]]; then
+        default_marker=" (default)"
+        default_found=true
+        if [[ "$is_online" == "true" ]]; then
+          default_online=true
+        fi
+      fi
+      
+      echo "   $status_icon $node - Status: $status$default_marker" >&2
+    fi
+  done <<< "$available_nodes"
+  
+  echo "" >&2
+  
+  if [[ ${#online_nodes[@]} -eq 0 ]]; then
+    echo "❌ Error: No online nodes found in cluster" >&2
+    return 1
+  fi
+  
+  if [[ "$default_found" == "true" && "$default_online" == "true" ]]; then
+    echo "✅ Default node '$PROXMOX_NODE' is online and will be included" >&2
+  elif [[ "$default_found" == "true" ]]; then
+    echo "⚠️  Warning: Default node '$PROXMOX_NODE' is not online" >&2
+  else
+    echo "⚠️  Warning: Default node '$PROXMOX_NODE' not found in cluster" >&2
+  fi
+  
+  echo "🔍 Will search containers across ${#online_nodes[@]} online node(s): ${online_nodes[*]}" >&2
+  echo ""
+  
+  # Return the online nodes (space-separated)
+  printf '%s\n' "${online_nodes[@]}"
 }
 
 # Main execution
@@ -184,13 +325,33 @@ main() {
   echo "🏷️  Proxmox Container Cleanup Script"
   echo "   Target tag: $PROJECT_TAG"
   echo "   Proxmox host: $PROXMOX_HOST"
-  echo "   Proxmox node: $PROXMOX_NODE"
   echo "   Mode: $([ "$DRY_RUN" == "true" ] && echo "DRY RUN" || echo "LIVE")"
   echo ""
   
-  # Get all containers
+  # Get all online nodes
+  local online_nodes_output
+  online_nodes_output=$(get_online_nodes)
+  
+  if [[ $? -ne 0 ]]; then
+    exit 1
+  fi
+  
+  # Convert output to array
+  local online_nodes=()
+  while IFS= read -r node; do
+    if [[ -n "$node" ]]; then
+      online_nodes+=("$node")
+    fi
+  done <<< "$online_nodes_output"
+  
+  if [[ ${#online_nodes[@]} -eq 0 ]]; then
+    echo "❌ Error: No online nodes available"
+    exit 1
+  fi
+  
+  # Get all containers from all online nodes
   local containers_response
-  containers_response=$(get_all_containers)
+  containers_response=$(get_all_containers_from_all_nodes "${online_nodes[@]}")
   
   if [[ $? -ne 0 ]]; then
     echo "❌ Error: Failed to fetch containers from Proxmox API"
@@ -221,14 +382,16 @@ main() {
   local vmids=()
   local names=()
   local statuses=()
+  local nodes=()
   
   # Parse and display containers
-  while IFS=':' read -r vmid name status tags; do
+  while IFS=':' read -r vmid name status tags node; do
     if [[ -n "$vmid" ]]; then
-      echo "   • VMID: $vmid | Name: $name | Status: $status | Tags: $tags"
+      echo "   • VMID: $vmid | Name: $name | Status: $status | Node: $node | Tags: $tags"
       vmids+=("$vmid")
       names+=("$name")
       statuses+=("$status")
+      nodes+=("$node")
       ((container_count++))
     fi
   done <<< "$tagged_containers"
@@ -261,18 +424,48 @@ main() {
   # Process each container
   local success_count=0
   local error_count=0
+  local skipped_count=0
   
   for i in "${!vmids[@]}"; do
     local vmid="${vmids[$i]}"
     local name="${names[$i]}"
     local status="${statuses[$i]}"
+    local node="${nodes[$i]}"
     
-    echo "[$((i+1))/$container_count] Processing container $vmid ($name)..."
+    echo "[$((i+1))/$container_count] Processing container $vmid ($name) on node $node..."
+    
+    # Ask for confirmation for each container (unless --force or --dry-run)
+    if [[ "$FORCE" == "false" && "$DRY_RUN" == "false" ]]; then
+      echo ""
+      echo "⚠️  About to STOP and REMOVE container:"
+      echo "   • VMID: $vmid"
+      echo "   • Name: $name" 
+      echo "   • Status: $status"
+      echo "   • Node: $node"
+      echo ""
+      read -p "Delete this container? (yes/no/quit): " -r
+      case $REPLY in
+        [Yy][Ee][Ss])
+          echo "✅ Proceeding with deletion..."
+          ;;
+        [Qq][Uu][Ii][Tt])
+          echo "❌ Operation cancelled by user"
+          exit 0
+          ;;
+        *)
+          echo "⏭️  Skipping container $vmid ($name)"
+          ((skipped_count++))
+          echo ""
+          continue
+          ;;
+      esac
+      echo ""
+    fi
     
     # Stop the container first
-    if stop_container "$vmid" "$name" "$status"; then
+    if stop_container "$vmid" "$name" "$status" "$node"; then
       # Then remove it
-      if remove_container "$vmid" "$name"; then
+      if remove_container "$vmid" "$name" "$node"; then
         ((success_count++))
       else
         ((error_count++))
@@ -288,6 +481,9 @@ main() {
   # Summary
   echo "📊 Cleanup Summary:"
   echo "   ✅ Successfully processed: $success_count containers"
+  if [[ $skipped_count -gt 0 ]]; then
+    echo "   ⏭️  Skipped: $skipped_count containers"
+  fi
   if [[ $error_count -gt 0 ]]; then
     echo "   ❌ Errors encountered: $error_count containers"
   fi

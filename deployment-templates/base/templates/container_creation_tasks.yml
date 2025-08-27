@@ -1,0 +1,151 @@
+# Shared container creation tasks
+# This file contains the common logic for creating Proxmox containers
+# Used by both base deployments and service-specific deployments
+
+- name: Check if container already exists
+  uri:
+    url: "https://{{ proxmox_host }}:8006/api2/json/nodes/{{ proxmox_node }}/lxc/{{ vm_id }}/status/current"
+    method: GET
+    headers:
+      Authorization: "PVEAPIToken={{ proxmox_token_id }}={{ proxmox_token_secret }}"
+    validate_certs: "{{ proxmox_api_validate_certs }}"
+    status_code: [200, 404]
+    return_content: yes
+  register: ct_exists_result
+  failed_when: false
+
+- name: Set container existence fact
+  set_fact:
+    container_exists: "{{ ct_exists_result.status | default(0) == 200 }}"
+
+- name: Debug container creation request
+  debug:
+    msg: |
+      🌐 Container Creation Request:
+      - Container exists: {{ container_exists }}
+      - VM ID: {{ vm_id }}
+      - VM Name: {{ vm_name }}
+      - Node: {{ proxmox_node }}
+      - Template: {{ vm_os_template }}
+      - Tags: {{ container_tags_combined }}
+  when: not container_exists
+
+- name: Create Proxmox container via API
+  shell: |
+    echo "🌐 Executing container creation..."
+    echo "📡 Request URL: https://{{ proxmox_host }}:8006/api2/json/nodes/{{ proxmox_node }}/lxc"
+    curl -k -X POST \
+      -H "Authorization: PVEAPIToken={{ proxmox_token_id }}={{ proxmox_token_secret }}" \
+      -H "Content-Type: application/x-www-form-urlencoded" \
+      -d "vmid={{ vm_id }}&unprivileged={{ (vm_unprivileged | default(true)) | ternary('1', '0') }}&features=nesting%3D1&password={{ (lookup('password', '/tmp/vm_root_password chars=ascii_letters,digits length=16')) | urlencode }}{% if ssh_public_key_content is defined %}&ssh-public-keys={{ ssh_public_key_content.content | b64decode | trim | urlencode }}{% endif %}&ostemplate={{ vm_os_template | urlencode }}&rootfs={{ (vm_storage ~ ':' ~ vm_disk_size) | urlencode }}&cores={{ vm_cores }}&memory={{ vm_memory }}&swap={{ vm_swap }}&net0={{ ('name=eth0,bridge=' ~ vm_network_bridge ~ ',firewall=1,ip=dhcp') | urlencode }}&tags={{ container_tags_combined | urlencode }}" \
+      "https://{{ proxmox_host }}:8006/api2/json/nodes/{{ proxmox_node }}/lxc"
+  register: proxmox_vm
+  failed_when: false
+  when: not container_exists
+
+- name: Debug container creation response
+  debug:
+    msg: |
+      🔍 Container Creation Response:
+      - Exit Code: {{ proxmox_vm.rc | default('skipped') }}
+      - Response: {{ proxmox_vm.stdout_lines[-1] if proxmox_vm.stdout_lines else 'No response' }}
+  when: not container_exists
+
+- name: Check if container creation was successful
+  fail:
+    msg: |
+      Container creation failed!
+
+      API Response: {{ proxmox_vm.stdout | default('No response') }}
+      Error Details: {{ proxmox_vm.stderr | default('No error details') }}
+      Return Code: {{ proxmox_vm.rc | default('Unknown') }}
+
+      Troubleshooting Tips:
+      1. Check if OS template exists: {{ vm_os_template }}
+      2. Verify Proxmox node name: {{ proxmox_node }}
+      3. Ensure storage '{{ vm_storage }}' exists and has space
+      4. Check API token permissions for VM creation
+      5. Verify VM ID {{ vm_id }} is not already in use
+
+      Run the debug script: ./tools/proxmox-debug.sh
+  when:
+    - not container_exists
+    - proxmox_vm.rc != 0 or (proxmox_vm.stdout | default('')) == '' or not (proxmox_vm.stdout | regex_search('\\{.*\\}')) or ((proxmox_vm.stdout | regex_search('\\{.*\\}')) | from_json).data == None
+
+- name: Extract UPID from successful container creation
+  set_fact:
+    container_upid: "{{ ((proxmox_vm.stdout | regex_search('\\{.*\\}')) | from_json).data }}"
+  when: 
+    - not container_exists
+    - proxmox_vm.rc == 0 
+    - (proxmox_vm.stdout | regex_search('\\{.*\\}'))
+
+- name: Wait for container creation task to complete with backoff
+  uri:
+    url: "https://{{ proxmox_host }}:8006/api2/json/nodes/{{ proxmox_node }}/tasks/{{ container_upid }}/status"
+    method: GET
+    headers:
+      Authorization: "PVEAPIToken={{ proxmox_token_id }}={{ proxmox_token_secret }}"
+    validate_certs: "{{ proxmox_api_validate_certs }}"
+    timeout: 30
+    return_content: yes
+    status_code: [200]
+  register: creation_task_status
+  until: creation_task_status.json.data.status == 'stopped'
+  retries: 20
+  delay: 5
+  when: 
+    - container_upid is defined
+    - not container_exists
+    
+- name: Check container creation task result
+  fail:
+    msg: |
+      Container creation task failed!
+      Task Status: {{ creation_task_status.json.data.status | default('unknown') }}
+      Task Type: {{ creation_task_status.json.data.type | default('unknown') }}
+      Exit Status: {{ creation_task_status.json.data.exitstatus | default('unknown') }}
+      
+      Check Proxmox web interface for detailed error information.
+  when: 
+    - container_upid is defined
+    - not container_exists
+    - creation_task_status.json.data.status == 'stopped'
+    - creation_task_status.json.data.exitstatus != '0'
+
+- name: Verify container exists after creation
+  uri:
+    url: "https://{{ proxmox_host }}:8006/api2/json/nodes/{{ proxmox_node }}/lxc/{{ vm_id }}/status/current"
+    method: GET
+    headers:
+      Authorization: "PVEAPIToken={{ proxmox_token_id }}={{ proxmox_token_secret }}"
+    validate_certs: "{{ proxmox_api_validate_certs }}"
+    timeout: 30
+    return_content: yes
+    status_code: [200]
+  register: container_verify_result
+  when: 
+    - container_upid is defined
+    - not container_exists
+
+- name: Debug container creation completion
+  debug:
+    msg: |
+      🎉 Container creation completed successfully!
+      - Task Status: {{ creation_task_status.json.data.status | default('skipped - container existed') }}
+      - Container Status: {{ container_verify_result.json.data.status | default('unknown') }}
+      - Container VMID: {{ container_verify_result.json.data.vmid | default(vm_id) }}
+      - Ready to start: {{ container_verify_result.json.data.status in ['stopped'] if container_verify_result.json is defined else 'unknown' }}
+
+- name: Start the container (idempotent)
+  uri:
+    url: "https://{{ proxmox_host }}:8006/api2/json/nodes/{{ proxmox_node }}/lxc/{{ vm_id }}/status/start"
+    method: POST
+    headers:
+      Authorization: "PVEAPIToken={{ proxmox_token_id }}={{ proxmox_token_secret }}"
+    validate_certs: "{{ proxmox_api_validate_certs }}"
+    status_code: [200, 500]
+    timeout: 60
+  register: start_result
+  failed_when: false
+  changed_when: "start_result.status == 200"

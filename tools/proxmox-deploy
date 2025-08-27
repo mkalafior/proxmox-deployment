@@ -165,17 +165,20 @@ service_ip_via_api() {
 # Helper: get VM status via Proxmox API (running/stopped)
 service_status_via_api() {
   local svc_dir="$1"; shift
-  local gv="$svc_dir/group_vars/all.yml"
-  local node="$(yaml_get_key "$gv" "proxmox_node")"
+  local service_config="$svc_dir/service-config.yml"
+  
+  # Get values from service-config.yml
+  local node=""
   local vmid=""
-  if [[ -f "$svc_dir/env.service" ]]; then
-    # shellcheck disable=SC1090
-    source "$svc_dir/env.service" 2>/dev/null || true
-    vmid="${VM_ID:-}"
+  if [[ -f "$service_config" ]]; then
+    node=$(grep -E '^proxmox_node:' "$service_config" | awk -F: '{print $2}' | xargs || true)
+    vmid=$(grep -E '^vm_id:' "$service_config" | awk -F: '{print $2}' | xargs || true)
   fi
+  
   if [[ -z "${PROXMOX_HOST:-}" || -z "${TOKEN_ID:-}" || -z "${TOKEN_SECRET:-}" || -z "$node" || -z "$vmid" ]]; then
     echo ""; return 0
   fi
+  
   local url="https://${PROXMOX_HOST}:8006/api2/json/nodes/${node}/lxc/${vmid}/status/current"
   local resp
   resp=$(curl -ks -H "Authorization: PVEAPIToken=${TOKEN_ID}=${TOKEN_SECRET}" "$url" 2>/dev/null || true)
@@ -445,22 +448,32 @@ case "$CMD" in
     find "$root_dir" -mindepth 1 -maxdepth 1 -type d -exec basename {} \; | sort | while read -r svc; do
       [[ -z "$svc" ]] && continue
       echo "🔹 $svc"
-      if [[ -f "$root_dir/$svc/env.service" ]]; then
-        # shellcheck disable=SC1090
-        source "$root_dir/$svc/env.service" 2>/dev/null || true
-        echo "   VM ID: ${VM_ID:-unknown}"
-        echo "   Port: ${APP_PORT:-unknown}"
-        echo "   Subdomain: ${APP_SUBDOMAIN:-unknown}"
+      
+      # Read service properties from service-config.yml
+      if [[ -f "$root_dir/$svc/service-config.yml" ]]; then
+        vm_id=$(grep -E '^vm_id:' "$root_dir/$svc/service-config.yml" | awk -F: '{print $2}' | xargs || true)
+        app_port=$(grep -E '^app_port:' "$root_dir/$svc/service-config.yml" | awk -F: '{print $2}' | xargs || true)
+        service_type=$(grep -E '^service_type:' "$root_dir/$svc/service-config.yml" | awk -F: '{print $2}' | xargs || true)
+        app_subdomain=$(grep -E '^app_subdomain:' "$root_dir/$svc/service-config.yml" | awk -F: '{print $2}' | xargs || true)
+        proxmox_node=$(grep -E '^proxmox_node:' "$root_dir/$svc/service-config.yml" | awk -F: '{print $2}' | xargs || true)
+        
+        echo "   Type: ${service_type:-unknown}"
+        echo "   VM ID: ${vm_id:-unknown}"
+        echo "   Port: ${app_port:-unknown}"
+        echo "   Node: ${proxmox_node:-unknown}"
+        [[ -n "$app_subdomain" ]] && echo "   Subdomain: $app_subdomain"
       fi
+      
       # Proxmox VM status
       pve_status=$(service_status_via_api "$root_dir/$svc")
       [[ -n "$pve_status" ]] && echo "   PVE: $pve_status"
 
       # Show DNS-based reachability
       fqdn=""
-      if [[ -f "$root_dir/$svc/group_vars/all.yml" ]]; then
-        service_host=$(grep -E '^service_hostname:' "$root_dir/$svc/group_vars/all.yml" | awk -F: '{print $2}' | xargs || true)
-        dns_domain=$(grep -E '^dns_domain:' "$root_dir/$svc/group_vars/all.yml" | awk -F: '{print $2}' | xargs || true)
+      if [[ -f "$root_dir/$svc/service-config.yml" ]]; then
+        service_host=$(grep -E '^service_hostname:' "$root_dir/$svc/service-config.yml" | awk -F: '{print $2}' | xargs || true)
+        # Get dns_domain from global config
+        dns_domain=$(grep -E '^dns_domain:' "$root_dir/global-config.yml" | awk -F: '{print $2}' | sed 's/"//g' | xargs || true)
         if [[ -n "$service_host" && -n "$dns_domain" ]]; then
           fqdn="$service_host.$dns_domain"
         fi
