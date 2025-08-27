@@ -69,6 +69,13 @@ create_service_from_template() {
         local relative_path="${template_file#$service_starter_dir/}"
         local output_file="$target_dir/${relative_path%.j2}"
         
+        # Skip if file already exists (don't overwrite existing project files)
+        if [[ -f "$output_file" ]]; then
+            log_info "  Skipping: $relative_path (file already exists)"
+            ((template_count++))
+            continue
+        fi
+        
         log_info "  Processing: $relative_path -> $(basename "$output_file")"
         
         # Create output directory if needed

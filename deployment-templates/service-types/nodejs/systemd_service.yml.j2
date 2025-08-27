@@ -10,7 +10,7 @@ WorkingDirectory={{ app_dir }}
 {% if nodejs_runtime == "bun" %}
 ExecStart=/usr/local/bin/bun run start
 {% else %}
-ExecStart=/usr/bin/node {{ app_main_file | default('index.js') }}
+ExecStart=/usr/bin/npm run start
 {% endif %}
 Restart=always
 RestartSec=10
