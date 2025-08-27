@@ -145,6 +145,8 @@ usage() {
   echo "  update [services...] [--force]"
   echo "  deploy <service>                         # Deploy single service"
   echo "  deploy-all                               # Deploy all services"
+  echo "  redeploy <service> [--no-build] [--force] # Redeploy code for existing service"
+  echo "  redeploy-all [--no-build] [--force]     # Redeploy all code-based services"
   echo "  cleanup <service>                        # Cleanup/destroy service"
   echo "  list                                     # List services under PROJECT_ROOT/deployments"
   echo "  status [service]                         # Show service status (hostname-based)"
@@ -228,6 +230,65 @@ case "$CMD" in
     svc="${1:-}"
     if [[ -z "$svc" ]]; then echo "Missing service name"; exit 1; fi
     ( cd "$PROJECT_ROOT_OVERRIDE/deployments/$svc" && ./deploy.sh )
+    ;;
+  redeploy)
+    svc="${1:-}"
+    shift || true
+    if [[ -z "$svc" ]]; then echo "Missing service name"; exit 1; fi
+    svc_dir="$PROJECT_ROOT_OVERRIDE/deployments/$svc"
+    if [[ ! -d "$svc_dir" ]]; then echo "Service not found: $svc"; exit 1; fi
+    
+    # Check if service supports redeployment
+    service_type=""
+    if [[ -f "$svc_dir/group_vars/all.yml" ]]; then
+      service_type=$(grep -E '^service_type:' "$svc_dir/group_vars/all.yml" | awk -F: '{print $2}' | xargs || true)
+    fi
+    
+    if [[ ! "$service_type" =~ ^(nodejs|python|golang|static)$ ]]; then
+      echo "❌ Service type '$service_type' does not support code redeployment"
+      echo "   Supported types: nodejs, python, golang, static"
+      exit 1
+    fi
+    
+    if [[ -f "$svc_dir/redeploy.sh" ]]; then
+      echo "🔄 Redeploying code for service: $svc"
+      ( cd "$svc_dir" && ./redeploy.sh "$@" )
+    else
+      echo "❌ No redeploy.sh found for $svc. Please regenerate the service."
+      exit 1
+    fi
+    ;;
+  redeploy-all)
+    # Redeploy all code-based services
+    root_dir="$PROJECT_ROOT_OVERRIDE/deployments"
+    if [[ ! -d "$root_dir" ]]; then
+      echo "No deployments directory found at: $root_dir"
+      exit 0
+    fi
+    echo "🔄 Redeploying all code-based services..."
+    echo "========================================"
+    find "$root_dir" -mindepth 1 -maxdepth 1 -type d -exec basename {} \; | sort | while read -r svc; do
+      [[ -z "$svc" ]] && continue
+      
+      # Check service type
+      service_type=""
+      if [[ -f "$root_dir/$svc/group_vars/all.yml" ]]; then
+        service_type=$(grep -E '^service_type:' "$root_dir/$svc/group_vars/all.yml" | awk -F: '{print $2}' | xargs || true)
+      fi
+      
+      if [[ "$service_type" =~ ^(nodejs|python|golang|static)$ ]]; then
+        echo ""
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        echo "🔄 Redeploying: $svc ($service_type)"
+        if [[ -f "$root_dir/$svc/redeploy.sh" ]]; then
+          ( cd "$root_dir/$svc" && ./redeploy.sh "$@" ) || echo "❌ Failed to redeploy $svc"
+        else
+          echo "❌ No redeploy.sh found for $svc"
+        fi
+      else
+        echo "⏭️  Skipping $svc (type: $service_type, not code-based)"
+      fi
+    done
     ;;
   deploy-all)
     # Deploy all services

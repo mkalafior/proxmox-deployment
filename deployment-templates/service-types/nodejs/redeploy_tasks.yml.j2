@@ -1,0 +1,88 @@
+# Node.js/Bun Redeployment Tasks
+- name: Check if package.json changed
+  stat:
+    path: "{{ app_dir }}/package.json"
+    checksum_algorithm: md5
+  register: new_package_json
+
+- name: Get previous package.json checksum
+  shell: |
+    if [ -f "{{ app_dir }}/.package.json.checksum" ]; then
+      cat {{ app_dir }}/.package.json.checksum
+    else
+      echo "none"
+    fi
+  register: old_package_checksum
+  changed_when: false
+
+- name: Determine if dependencies need update
+  set_fact:
+    dependencies_changed: "{{ new_package_json.stat.checksum != old_package_checksum.stdout }}"
+
+- name: Install/update dependencies with npm
+  shell: npm ci --production
+  args:
+    chdir: "{{ app_dir }}"
+  become_user: "{{ app_user }}"
+  when:
+    - nodejs_runtime == "node"
+    - dependencies_changed or force_dependency_update | default(false)
+
+- name: Install/update dependencies with Bun
+  shell: /usr/local/bin/bun install --production
+  args:
+    chdir: "{{ app_dir }}"
+  become_user: "{{ app_user }}"
+  when:
+    - nodejs_runtime == "bun"
+    - dependencies_changed or force_dependency_update | default(false)
+
+- name: Check if build script exists in package.json
+  shell: |
+    if command -v jq >/dev/null 2>&1; then
+      jq -er '.scripts.build' "{{ app_dir }}/package.json" >/dev/null 2>&1
+    else
+      grep -q '"build"' "{{ app_dir }}/package.json"
+    fi
+  register: build_script_exists
+  failed_when: false
+  changed_when: false
+  when: skip_build | default(false) == false
+
+- name: Build application with npm
+  shell: npm run build
+  args:
+    chdir: "{{ app_dir }}"
+  become_user: "{{ app_user }}"
+  register: npm_build_result
+  when:
+    - nodejs_runtime == "node"
+    - build_script_exists.rc == 0
+    - skip_build | default(false) == false
+
+- name: Build application with Bun
+  shell: /usr/local/bin/bun run build
+  args:
+    chdir: "{{ app_dir }}"
+  become_user: "{{ app_user }}"
+  register: bun_build_result
+  when:
+    - nodejs_runtime == "bun"
+    - build_script_exists.rc == 0
+    - skip_build | default(false) == false
+
+- name: Check build results
+  fail:
+    msg: "Build failed for {{ service_name }}"
+  when:
+    - build_script_exists.rc == 0
+    - skip_build | default(false) == false
+    - (npm_build_result.failed | default(false)) or (bun_build_result.failed | default(false))
+
+- name: Save package.json checksum
+  shell: echo "{{ new_package_json.stat.checksum }}" > {{ app_dir }}/.package.json.checksum
+  when: dependencies_changed
+
+- name: Set build status
+  set_fact:
+    build_completed: "{{ build_script_exists.rc == 0 and not (skip_build | default(false)) }}"

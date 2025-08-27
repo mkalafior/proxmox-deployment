@@ -623,7 +623,7 @@
 
     - name: Test application endpoint
       uri:
-        url: "http://{{ ansible_host }}:{{ app_port }}/health"
+        url: "http://{{ ansible_host }}:{{ app_port }}{{ health_check_path | default('/health') }}"
         method: GET
         timeout: 10
       register: health_check
@@ -634,7 +634,7 @@
       debug:
         msg: |
           {{ service_name }} Health check status: {{ health_check.status | default('unknown') }}
-          Endpoint: http://{{ ansible_host }}:{{ app_port }}/health
+          Endpoint: http://{{ ansible_host }}:{{ app_port }}{{ health_check_path | default('/health') }}
       when: service_type != 'database'
 
     - name: Show recent logs

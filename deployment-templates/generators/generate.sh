@@ -221,6 +221,10 @@ local_app_path: ../../services/$SERVICE_NAME
 service_hostname: $SERVICE_HOSTNAME
 app_subdomain: $APP_SUBDOMAIN
 proxmox_node: $PROXMOX_NODE
+
+# Health check configuration
+# Override the default health check path from service type if needed
+# health_check_path: "/custom/health"
 EOF
         [[ -n "$RUNTIME_VARIANT" ]] && echo "${SERVICE_TYPE}_runtime: $RUNTIME_VARIANT" >> "$DEPLOYMENT_DIR/service-config.yml"
         log_info "Created service-config.yml"
@@ -284,6 +288,139 @@ EOF
         cp "$group_vars_template" "$DEPLOYMENT_DIR/group_vars/all.yml"
         log_info "Created group_vars/all.yml"
     fi
+    
+    # Generate redeploy.yml using Python template merger (for code-based services)
+    if [[ "$SERVICE_TYPE" =~ ^(nodejs|python|golang|static)$ ]]; then
+        local redeploy_template="$TEMPLATES_BASE/base/redeploy.yml.j2"
+        if [[ -f "$redeploy_template" && -f "$merge_script" ]]; then
+            if python3 "$merge_script" "$redeploy_template" "$TEMPLATES_BASE/service-types/$SERVICE_TYPE" "$DEPLOYMENT_DIR/redeploy.yml" "$SERVICE_NAME"; then
+                log_info "Created merged redeploy.yml"
+            else
+                log_warn "Redeploy template merging failed, using base template"
+                cp "$redeploy_template" "$DEPLOYMENT_DIR/redeploy.yml"
+            fi
+        elif [[ -f "$redeploy_template" ]]; then
+            cp "$redeploy_template" "$DEPLOYMENT_DIR/redeploy.yml"
+            log_info "Created redeploy.yml (no merger available)"
+        fi
+    fi
+    
+    # Create deployment scripts
+    create_deployment_scripts
+}
+
+# Create deployment scripts (deploy.sh, redeploy.sh, cleanup.sh)
+create_deployment_scripts() {
+    log_step "Creating deployment scripts..."
+    
+    # Create deploy.sh script
+    cat > "$DEPLOYMENT_DIR/deploy.sh" << 'EOF'
+#!/bin/bash
+set -euo pipefail
+
+# Load global configuration
+if [[ -f "../../global-config/env.proxmox.global" ]]; then
+    source "../../global-config/env.proxmox.global"
+fi
+
+# Load service-specific configuration
+if [[ -f "env.service" ]]; then
+    source "env.service"
+fi
+
+# Run Ansible playbook
+echo "🚀 Deploying service..."
+ansible-playbook -i localhost, deploy.yml
+EOF
+    chmod +x "$DEPLOYMENT_DIR/deploy.sh"
+    log_info "Created deploy.sh"
+    
+    # Create redeploy.sh script (for code-based services only)
+    if [[ "$SERVICE_TYPE" =~ ^(nodejs|python|golang|static)$ ]]; then
+        cat > "$DEPLOYMENT_DIR/redeploy.sh" << 'EOF'
+#!/bin/bash
+set -euo pipefail
+
+# Parse command line arguments
+SKIP_BUILD=false
+FORCE_REDEPLOY=false
+
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        --no-build)
+            SKIP_BUILD=true
+            shift
+            ;;
+        --force)
+            FORCE_REDEPLOY=true
+            shift
+            ;;
+        *)
+            echo "Unknown option: $1"
+            echo "Usage: $0 [--no-build] [--force]"
+            exit 1
+            ;;
+    esac
+done
+
+# Load global configuration
+if [[ -f "../../global-config/env.proxmox.global" ]]; then
+    source "../../global-config/env.proxmox.global"
+fi
+
+# Load service-specific configuration
+if [[ -f "env.service" ]]; then
+    source "env.service"
+fi
+
+# Set extra variables for Ansible
+EXTRA_VARS=""
+if [[ "$SKIP_BUILD" == "true" ]]; then
+    EXTRA_VARS="$EXTRA_VARS -e skip_build=true"
+fi
+if [[ "$FORCE_REDEPLOY" == "true" ]]; then
+    EXTRA_VARS="$EXTRA_VARS -e force_dependency_update=true"
+fi
+
+# Run Ansible playbook
+echo "🔄 Redeploying service code..."
+if [[ -f "redeploy.yml" ]]; then
+    ansible-playbook -i localhost, redeploy.yml $EXTRA_VARS
+else
+    echo "❌ redeploy.yml not found. This service may not support code redeployment."
+    exit 1
+fi
+EOF
+        chmod +x "$DEPLOYMENT_DIR/redeploy.sh"
+        log_info "Created redeploy.sh"
+    fi
+    
+    # Create cleanup.sh script
+    cat > "$DEPLOYMENT_DIR/cleanup.sh" << 'EOF'
+#!/bin/bash
+set -euo pipefail
+
+# Load global configuration
+if [[ -f "../../global-config/env.proxmox.global" ]]; then
+    source "../../global-config/env.proxmox.global"
+fi
+
+# Load service-specific configuration
+if [[ -f "env.service" ]]; then
+    source "env.service"
+fi
+
+# Run Ansible playbook
+echo "🧹 Cleaning up service..."
+if [[ -f "cleanup.yml" ]]; then
+    ansible-playbook -i localhost, cleanup.yml
+else
+    echo "❌ cleanup.yml not found."
+    exit 1
+fi
+EOF
+    chmod +x "$DEPLOYMENT_DIR/cleanup.sh"
+    log_info "Created cleanup.sh"
 }
 
 # Main execution
@@ -300,6 +437,10 @@ main() {
     echo "🚀 Next steps:"
     echo "   1. Customize service code: $SERVICE_DIR"
     echo "   2. Deploy: cd $DEPLOYMENT_DIR && ./deploy.sh"
+    if [[ "$SERVICE_TYPE" =~ ^(nodejs|python|golang|static)$ ]]; then
+        echo "   3. Redeploy code changes: cd $DEPLOYMENT_DIR && ./redeploy.sh"
+        echo "      Or use: pxdcli redeploy $SERVICE_NAME"
+    fi
 }
 
 main "$@"

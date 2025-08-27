@@ -122,6 +122,7 @@ The installer automatically sets up tab completion with these features:
 ```bash
 pxdcli de<TAB>                    # Completes to "deploy"
 pxdcli deploy <TAB>               # Shows available services
+pxdcli redeploy <TAB>             # Shows available services and --no-build --force flags
 pxdcli generate myapp --type <TAB> # Shows: nodejs python golang rust database static tor-proxy
 pxdcli update <TAB>               # Shows services and --force flag
 ```
@@ -204,11 +205,40 @@ pxdcli generate postgres-db --type database --runtime postgresql \
 pxdcli deploy python-api
 
 # Deploy all services
-pxdcli deploy
+pxdcli deploy-all
 
 # Or deploy from service directory
 cd deployments/python-api && ./deploy.sh
 ```
+
+### 3. Redeploy Code Changes (Fast Updates)
+
+For code-based services (nodejs, python, golang, static), you can quickly redeploy just your code changes without reprovisioning the entire VM:
+
+```bash
+# Redeploy single service
+pxdcli redeploy python-api
+
+# Redeploy all code-based services
+pxdcli redeploy-all
+
+# Skip build step (faster for interpreted languages)
+pxdcli redeploy python-api --no-build
+
+# Force dependency update even if package files haven't changed
+pxdcli redeploy python-api --force
+
+# Or redeploy from service directory
+cd deployments/python-api && ./redeploy.sh
+```
+
+**Redeploy Features:**
+- ⚡ **Fast**: Completes in <60 seconds (vs 3-5 minutes for full deploy)
+- 🔍 **Smart**: Only updates dependencies when package files change
+- 🏗️ **Build-aware**: Automatically runs build steps for compiled languages
+- 🩺 **Health checks**: Verifies service is running after redeployment
+- 🔄 **Rollback**: Automatically restores previous version on failure
+- 📦 **Backup**: Keeps previous versions for quick rollback
 
 ## ✨ New Features
 
@@ -242,7 +272,7 @@ pxdcli generate api-service --type nodejs --port 3001 --node pve2
 pxdcli generate api-service --type nodejs --port 3001 --node pve2 --vm-id 150
 ```
 
-### 3. Manage Services
+### 4. Manage Services
 
 ```bash
 # List all services
@@ -259,6 +289,9 @@ pxdcli logs python-api
 
 # Restart service
 pxdcli restart python-api
+
+# Redeploy code changes (fast)
+pxdcli redeploy python-api
 
 # Clean up service
 pxdcli cleanup python-api
@@ -365,12 +398,15 @@ export APP_SUBDOMAIN="api"
 export SERVICE_HOSTNAME="python-api"
 ```
 
-### Per-Service Proxmox Node Override
-Deploy different services to different Proxmox nodes by configuring `deployments/<service>/service-config.yml`:
+### Per-Service Configuration Override
+Configure service-specific settings by editing `deployments/<service>/service-config.yml`:
 
 ```yaml
 # Proxmox node override (leave empty to use global default)
 proxmox_node: pve  # Deploy this service to specific node
+
+# Health check path override (overrides service type default)
+health_check_path: "/api/health"  # Custom health endpoint
 ```
 
 **Workflow:**
@@ -653,6 +689,32 @@ Add to service config:
 custom_env_vars:
   DATABASE_URL: "postgresql://..."
   API_KEY: "secret-key"
+```
+
+### Health Check Configuration
+Each service type has a default health check path that can be overridden:
+
+**Default health check paths by service type:**
+- **Node.js/Python/Go**: `/health`
+- **Static sites**: `/` (root path)
+- **Database/Tor-proxy**: `/` (port-based checks)
+
+**Override per service:**
+```yaml
+# In deployments/<service>/service-config.yml
+health_check_path: "/api/v1/health"  # Custom health endpoint
+```
+
+**Service-specific examples:**
+```yaml
+# API service with versioned health endpoint
+health_check_path: "/api/v1/health"
+
+# Admin service with custom path
+health_check_path: "/admin/status"
+
+# Microservice with detailed health checks
+health_check_path: "/health/detailed"
 ```
 
 ### Resource Customization

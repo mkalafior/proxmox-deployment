@@ -1,0 +1,60 @@
+# Python Health Check
+- name: Wait for service to be ready
+  pause:
+    seconds: 3
+
+- name: Check if service is active
+  systemd:
+    name: "{{ app_service_name }}"
+  register: service_status
+
+- name: Verify service is running
+  assert:
+    that:
+      - service_status.status.ActiveState == "active"
+    fail_msg: "Service {{ app_service_name }} is not active. Status: {{ service_status.status.ActiveState }}"
+
+- name: Check application port is listening
+  wait_for:
+    host: "0.0.0.0"
+    port: "{{ app_port }}"
+    timeout: "{{ health_check_timeout | default(30) }}"
+  register: port_check
+
+- name: Test health endpoint
+  uri:
+    url: "http://localhost:{{ app_port }}{{ health_check_path | default('/health') }}"
+    method: GET
+    timeout: 10
+    status_code: [200, 404]  # 404 is acceptable if no health endpoint
+  register: health_response
+  failed_when: false
+
+- name: Check Python process is running
+  shell: pgrep -f "python.*{{ app_dir }}"
+  register: python_process
+  failed_when: false
+
+- name: Set health check result
+  set_fact:
+    health_check_result:
+      status: "{{ 'healthy' if health_response.status == 200 else 'running' if port_check.elapsed is defined else 'unhealthy' }}"
+      msg: "{{ 'Health endpoint responding' if health_response.status == 200 else 'Port listening, no health endpoint' if port_check.elapsed is defined else 'Service not responding' }}"
+      port_listening: "{{ port_check.elapsed is defined }}"
+      health_endpoint: "{{ health_response.status == 200 }}"
+      process_running: "{{ python_process.rc == 0 }}"
+
+- name: Display health check results
+  debug:
+    msg: |
+      Health Check Results for {{ service_name }}:
+      - Status: {{ health_check_result.status }}
+      - Port {{ app_port }}: {{ 'Listening' if health_check_result.port_listening else 'Not responding' }}
+      - Health Endpoint: {{ 'Available' if health_check_result.health_endpoint else 'Not available' }}
+      - Python Process: {{ 'Running' if health_check_result.process_running else 'Not found' }}
+
+- name: Trigger rollback on health check failure
+  fail:
+    msg: "Health check failed for {{ service_name }}"
+  when: not health_check_result.port_listening
+  notify: rollback on failure

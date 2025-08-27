@@ -7,6 +7,8 @@ provides_runtime_install: true
 provides_dependency_install: true
 provides_build_tasks: true
 provides_systemd_service: true
+provides_redeploy_tasks: true
+provides_health_check: true
 
 # File exclusions for tar archive
 file_exclusions:

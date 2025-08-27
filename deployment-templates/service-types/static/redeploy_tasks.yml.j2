@@ -1,0 +1,104 @@
+# Static Site Redeployment Tasks
+- name: Check if package.json exists for build process
+  stat:
+    path: "{{ app_dir }}/package.json"
+  register: static_package_json
+
+- name: Check if build script exists
+  shell: |
+    if command -v jq >/dev/null 2>&1; then
+      jq -er '.scripts.build' "{{ app_dir }}/package.json" >/dev/null 2>&1
+    else
+      grep -q '"build"' "{{ app_dir }}/package.json"
+    fi
+  register: static_build_script_exists
+  failed_when: false
+  changed_when: false
+  when: 
+    - static_package_json.stat.exists
+    - skip_build | default(false) == false
+
+- name: Install Node.js dependencies for build
+  shell: npm ci
+  args:
+    chdir: "{{ app_dir }}"
+  become_user: "{{ app_user }}"
+  when:
+    - static_package_json.stat.exists
+    - static_build_script_exists.rc == 0
+    - skip_build | default(false) == false
+
+- name: Build static site
+  shell: npm run build
+  args:
+    chdir: "{{ app_dir }}"
+  become_user: "{{ app_user }}"
+  register: static_build_result
+  when:
+    - static_package_json.stat.exists
+    - static_build_script_exists.rc == 0
+    - skip_build | default(false) == false
+
+- name: Check build results
+  fail:
+    msg: "Static site build failed for {{ service_name }}: {{ static_build_result.stderr }}"
+  when:
+    - static_build_script_exists.rc == 0
+    - skip_build | default(false) == false
+    - static_build_result.failed | default(false)
+
+- name: Check for common build output directories
+  stat:
+    path: "{{ app_dir }}/{{ item }}"
+  register: build_dirs
+  loop:
+    - dist
+    - build
+    - public
+    - _site
+
+- name: Set build directory
+  set_fact:
+    static_build_dir: "{{ (build_dirs.results | selectattr('stat.exists') | map(attribute='item') | first) | default('') }}"
+
+- name: Copy built files to web root if build directory exists
+  shell: |
+    if [ -d "{{ app_dir }}/{{ static_build_dir }}" ] && [ "{{ static_build_dir }}" != "" ]; then
+      # Create web root if it doesn't exist
+      mkdir -p /var/www/{{ service_name }}
+      # Copy built files
+      cp -r {{ app_dir }}/{{ static_build_dir }}/* /var/www/{{ service_name }}/
+      # Set proper ownership
+      chown -R www-data:www-data /var/www/{{ service_name }}
+    else
+      # No build directory, copy all files except node_modules and source
+      mkdir -p /var/www/{{ service_name }}
+      rsync -av --exclude='node_modules' --exclude='src' --exclude='.git' \
+        {{ app_dir }}/ /var/www/{{ service_name }}/
+      chown -R www-data:www-data /var/www/{{ service_name }}
+    fi
+  when: static_build_script_exists.rc == 0 or not static_package_json.stat.exists
+
+- name: Ensure Nginx configuration is up to date
+  template:
+    src: nginx-static.conf.j2
+    dest: "/etc/nginx/sites-available/{{ service_name }}"
+    backup: yes
+  notify: reload nginx
+
+- name: Test Nginx configuration
+  shell: nginx -t
+  register: nginx_test
+  failed_when: nginx_test.rc != 0
+
+- name: Set build status
+  set_fact:
+    build_completed: "{{ static_build_script_exists.rc == 0 and not (skip_build | default(false)) }}"
+    web_root_updated: true
+
+# Handlers for static site redeployment
+handlers:
+  - name: reload nginx
+    systemd:
+      name: nginx
+      state: reloaded

@@ -14,7 +14,7 @@ _pxdcli_completion() {
     fi
     
     # Define all available commands
-    local commands="generate create update deploy deploy-all cleanup list status logs restart info ssh nodes help manage ip"
+    local commands="generate create update deploy deploy-all redeploy redeploy-all cleanup list status logs restart info ssh nodes help manage ip"
     
     # Define service types for generate command
     local service_types="nodejs python golang rust database static tor-proxy"
@@ -46,15 +46,31 @@ _pxdcli_completion() {
                     # Don't provide completions, let user type service name
                     return 0
                     ;;
-                deploy|cleanup|status|logs|restart|info|ssh|ip)
+                deploy|redeploy|cleanup|status|logs|restart|info|ssh|ip)
                     # Complete with available service names
-                    COMPREPLY=($(compgen -W "$(_get_services)" -- "$cur"))
+                    if [[ "$prev" == "redeploy" ]]; then
+                        # For redeploy, also support flags
+                        if [[ "$cur" == --* ]]; then
+                            COMPREPLY=($(compgen -W "--no-build --force" -- "$cur"))
+                        else
+                            COMPREPLY=($(compgen -W "$(_get_services)" -- "$cur"))
+                        fi
+                    else
+                        COMPREPLY=($(compgen -W "$(_get_services)" -- "$cur"))
+                    fi
                     return 0
                     ;;
                 update)
                     # Complete with available service names or --force
                     local services="$(_get_services)"
                     COMPREPLY=($(compgen -W "$services --force" -- "$cur"))
+                    return 0
+                    ;;
+                redeploy-all)
+                    # Complete with flags only
+                    if [[ "$cur" == --* ]]; then
+                        COMPREPLY=($(compgen -W "--no-build --force" -- "$cur"))
+                    fi
                     return 0
                     ;;
                 *)

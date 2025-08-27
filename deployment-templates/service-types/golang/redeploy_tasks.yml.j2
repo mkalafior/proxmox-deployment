@@ -1,0 +1,101 @@
+# Go Redeployment Tasks
+- name: Check if go.mod changed
+  stat:
+    path: "{{ app_dir }}/go.mod"
+    checksum_algorithm: md5
+  register: new_go_mod
+
+- name: Get previous go.mod checksum
+  shell: |
+    if [ -f "{{ app_dir }}/.go.mod.checksum" ]; then
+      cat {{ app_dir }}/.go.mod.checksum
+    else
+      echo "none"
+    fi
+  register: old_go_mod_checksum
+  changed_when: false
+
+- name: Determine if dependencies need update
+  set_fact:
+    dependencies_changed: "{{ new_go_mod.stat.checksum != old_go_mod_checksum.stdout }}"
+
+- name: Download Go dependencies
+  shell: |
+    export PATH=$PATH:/usr/local/go/bin
+    go mod download
+  args:
+    chdir: "{{ app_dir }}"
+  become_user: "{{ app_user }}"
+  when: dependencies_changed or force_dependency_update | default(false)
+
+- name: Tidy Go modules
+  shell: |
+    export PATH=$PATH:/usr/local/go/bin
+    go mod tidy
+  args:
+    chdir: "{{ app_dir }}"
+  become_user: "{{ app_user }}"
+  when: dependencies_changed or force_dependency_update | default(false)
+
+- name: Build Go application
+  shell: |
+    export PATH=$PATH:/usr/local/go/bin
+    go build -o {{ app_service_name }} {{ app_main_file | default('.') }}
+  args:
+    chdir: "{{ app_dir }}"
+  become_user: "{{ app_user }}"
+  environment:
+    GOOS: linux
+    GOARCH: amd64
+    CGO_ENABLED: "0"
+  register: go_build_result
+  when: skip_build | default(false) == false
+
+- name: Check build results
+  fail:
+    msg: "Go build failed for {{ service_name }}: {{ go_build_result.stderr }}"
+  when:
+    - skip_build | default(false) == false
+    - go_build_result.failed | default(false)
+
+- name: Verify binary was created
+  stat:
+    path: "{{ app_dir }}/{{ app_service_name }}"
+  register: go_binary
+  when: skip_build | default(false) == false
+
+- name: Ensure binary is executable
+  file:
+    path: "{{ app_dir }}/{{ app_service_name }}"
+    mode: '0755'
+    owner: "{{ app_user }}"
+    group: "{{ app_user }}"
+  when: 
+    - skip_build | default(false) == false
+    - go_binary.stat.exists
+
+- name: Run Go tests
+  shell: |
+    export PATH=$PATH:/usr/local/go/bin
+    go test ./... -v
+  args:
+    chdir: "{{ app_dir }}"
+  become_user: "{{ app_user }}"
+  register: go_tests
+  failed_when: false
+  when:
+    - run_tests | default(false)
+    - skip_build | default(false) == false
+
+- name: Check test results
+  debug:
+    msg: "Tests {{ 'passed' if go_tests.rc == 0 else 'failed or skipped' }}"
+  when: go_tests is defined
+
+- name: Save go.mod checksum
+  shell: echo "{{ new_go_mod.stat.checksum }}" > {{ app_dir }}/.go.mod.checksum
+  when: dependencies_changed and new_go_mod.stat.exists
+
+- name: Set build status
+  set_fact:
+    build_completed: "{{ not (skip_build | default(false)) and go_binary.stat.exists | default(false) }}"

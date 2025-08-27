@@ -3,6 +3,7 @@
 import sys
 import os
 import argparse
+import yaml
 from pathlib import Path
 
 def merge_template(base_template_path, service_type_dir, output_path, service_name):
@@ -11,6 +12,43 @@ def merge_template(base_template_path, service_type_dir, output_path, service_na
     # Read the base template
     with open(base_template_path, 'r') as f:
         template_content = f.read()
+    
+    # Read service type configuration to get health_check_path and other variables
+    service_config_path = os.path.join(service_type_dir, 'config.yml')
+    service_config = {}
+    if os.path.exists(service_config_path):
+        with open(service_config_path, 'r') as f:
+            service_config = yaml.safe_load(f) or {}
+        print(f"  ✓ Loaded service config from {service_config_path}")
+    
+    # Check for service-specific override in the deployment directory
+    deployment_dir = os.path.dirname(output_path)
+    service_override_path = os.path.join(deployment_dir, 'service-config.yml')
+    service_override = {}
+    if os.path.exists(service_override_path):
+        with open(service_override_path, 'r') as f:
+            service_override = yaml.safe_load(f) or {}
+        print(f"  ✓ Loaded service override config from {service_override_path}")
+    
+    # Extract health_check_path with override support
+    health_check_path = service_override.get('health_check_path') or service_config.get('health_check_path', '/health')
+    
+    # Add health_check_path variable definition at the top of the template
+    # Find the first task or play and insert the variable before it
+    lines = template_content.split('\n')
+    insert_index = 0
+    
+    # Find where to insert the health_check_path variable (after the initial comments/metadata)
+    for i, line in enumerate(lines):
+        if line.strip().startswith('- name:') or line.strip().startswith('- hosts:'):
+            insert_index = i
+            break
+    
+    # Insert the health_check_path variable
+    health_check_var = f"# Health check path from service configuration\n{% set health_check_path = '{health_check_path}' %}\n"
+    lines.insert(insert_index, health_check_var)
+    template_content = '\n'.join(lines)
+    print(f"  ✓ Set health_check_path to: {health_check_path}")
     
     # Define the include patterns and their corresponding files with conditional blocks
     includes = {
@@ -28,6 +66,16 @@ def merge_template(base_template_path, service_type_dir, output_path, service_na
             "file": "build_tasks.yml.j2",
             "start_pattern": "# SERVICE-SPECIFIC INJECTION POINT: Build Tasks\n    {% if service_build_tasks is defined and service_build_tasks %}\n    {% include 'service-parts/build_tasks.yml.j2' %}\n    {% endif %}",
             "simple_pattern": "{% include 'service-parts/build_tasks.yml.j2' %}"
+        },
+        "redeploy_tasks": {
+            "file": "redeploy_tasks.yml.j2",
+            "start_pattern": "# SERVICE-SPECIFIC INJECTION POINT: Redeployment Tasks\n    {% if service_redeploy_tasks is defined and service_redeploy_tasks %}\n    {% include 'service-parts/redeploy_tasks.yml.j2' %}\n    {% endif %}",
+            "simple_pattern": "{% include 'service-parts/redeploy_tasks.yml.j2' %}"
+        },
+        "health_check": {
+            "file": "health_check.yml.j2",
+            "start_pattern": "# SERVICE-SPECIFIC INJECTION POINT: Health Check\n    {% if service_health_check is defined and service_health_check %}\n    {% include 'service-parts/health_check.yml.j2' %}\n    {% endif %}",
+            "simple_pattern": "{% include 'service-parts/health_check.yml.j2' %}"
         }
     }
     

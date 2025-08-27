@@ -44,6 +44,14 @@ default_env:
 # Health check endpoint
 health_check_path: "/health"
 
+# Template parts provided by this service type
+provides_runtime_install: true
+provides_dependency_install: true
+provides_build_tasks: false
+provides_systemd_service: true
+provides_redeploy_tasks: true
+provides_health_check: true
+
 # Default systemd service configuration
 systemd_service:
   Type: simple

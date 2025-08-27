@@ -1,0 +1,72 @@
+# Static Site Health Check
+- name: Wait for Nginx to reload
+  pause:
+    seconds: 2
+
+- name: Check if Nginx is active
+  systemd:
+    name: nginx
+  register: nginx_status
+
+- name: Verify Nginx is running
+  assert:
+    that:
+      - nginx_status.status.ActiveState == "active"
+    fail_msg: "Nginx is not active. Status: {{ nginx_status.status.ActiveState }}"
+
+- name: Check application port is listening
+  wait_for:
+    host: "0.0.0.0"
+    port: "{{ app_port }}"
+    timeout: "{{ health_check_timeout | default(30) }}"
+  register: port_check
+
+- name: Test static site is serving content
+  uri:
+    url: "http://localhost:{{ app_port }}{{ health_check_path | default('/') }}"
+    method: GET
+    timeout: 10
+    status_code: [200, 301, 302]
+  register: static_response
+  failed_when: false
+
+- name: Check for index file in web root
+  stat:
+    path: "/var/www/{{ service_name }}/index.html"
+  register: index_file
+
+- name: Check Nginx error log for recent errors
+  shell: tail -n 10 /var/log/nginx/error.log | grep -i error || true
+  register: nginx_errors
+  changed_when: false
+
+- name: Set health check result
+  set_fact:
+    health_check_result:
+      status: "{{ 'healthy' if static_response.status in [200, 301, 302] else 'running' if port_check.elapsed is defined else 'unhealthy' }}"
+      msg: "{{ 'Site responding correctly' if static_response.status in [200, 301, 302] else 'Port listening but site not responding' if port_check.elapsed is defined else 'Site not accessible' }}"
+      port_listening: "{{ port_check.elapsed is defined }}"
+      site_responding: "{{ static_response.status in [200, 301, 302] }}"
+      index_exists: "{{ index_file.stat.exists }}"
+      nginx_errors: "{{ nginx_errors.stdout_lines | length > 0 }}"
+
+- name: Display health check results
+  debug:
+    msg: |
+      Health Check Results for {{ service_name }}:
+      - Status: {{ health_check_result.status }}
+      - Port {{ app_port }}: {{ 'Listening' if health_check_result.port_listening else 'Not responding' }}
+      - Site Response: {{ 'HTTP ' + (static_response.status | string) if health_check_result.site_responding else 'Not responding' }}
+      - Index File: {{ 'Exists' if health_check_result.index_exists else 'Missing' }}
+      - Nginx Errors: {{ 'Found in log' if health_check_result.nginx_errors else 'None recent' }}
+
+- name: Show recent Nginx errors if any
+  debug:
+    msg: "Recent Nginx errors: {{ nginx_errors.stdout_lines }}"
+  when: health_check_result.nginx_errors
+
+- name: Trigger rollback on health check failure
+  fail:
+    msg: "Health check failed for {{ service_name }}"
+  when: not health_check_result.port_listening or not health_check_result.site_responding
+  notify: rollback on failure

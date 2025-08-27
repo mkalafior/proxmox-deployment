@@ -1,0 +1,81 @@
+# Python Redeployment Tasks
+- name: Check if requirements.txt changed
+  stat:
+    path: "{{ app_dir }}/requirements.txt"
+    checksum_algorithm: md5
+  register: new_requirements_txt
+
+- name: Get previous requirements.txt checksum
+  shell: |
+    if [ -f "{{ app_dir }}/.requirements.txt.checksum" ]; then
+      cat {{ app_dir }}/.requirements.txt.checksum
+    else
+      echo "none"
+    fi
+  register: old_requirements_checksum
+  changed_when: false
+
+- name: Determine if dependencies need update
+  set_fact:
+    dependencies_changed: "{{ new_requirements_txt.stat.checksum != old_requirements_checksum.stdout }}"
+
+- name: Create virtual environment if it doesn't exist
+  shell: python3 -m venv {{ app_dir }}/venv
+  args:
+    creates: "{{ app_dir }}/venv"
+  become_user: "{{ app_user }}"
+
+- name: Update pip in virtual environment
+  shell: "{{ app_dir }}/venv/bin/pip install --upgrade pip"
+  become_user: "{{ app_user }}"
+  when: dependencies_changed or force_dependency_update | default(false)
+
+- name: Install/update Python dependencies
+  shell: "{{ app_dir }}/venv/bin/pip install -r requirements.txt"
+  args:
+    chdir: "{{ app_dir }}"
+  become_user: "{{ app_user }}"
+  when: 
+    - new_requirements_txt.stat.exists
+    - dependencies_changed or force_dependency_update | default(false)
+
+- name: Check for setup.py or pyproject.toml
+  stat:
+    path: "{{ app_dir }}/{{ item }}"
+  register: python_build_files
+  loop:
+    - setup.py
+    - pyproject.toml
+
+- name: Install package in development mode if setup files exist
+  shell: "{{ app_dir }}/venv/bin/pip install -e ."
+  args:
+    chdir: "{{ app_dir }}"
+  become_user: "{{ app_user }}"
+  when:
+    - python_build_files.results | selectattr('stat.exists') | list | length > 0
+    - skip_build | default(false) == false
+
+- name: Run Python tests if test directory exists
+  shell: "{{ app_dir }}/venv/bin/python -m pytest tests/ -v"
+  args:
+    chdir: "{{ app_dir }}"
+  become_user: "{{ app_user }}"
+  register: python_tests
+  failed_when: false
+  when:
+    - run_tests | default(false)
+    - skip_build | default(false) == false
+
+- name: Check test results
+  debug:
+    msg: "Tests {{ 'passed' if python_tests.rc == 0 else 'failed or skipped' }}"
+  when: python_tests is defined
+
+- name: Save requirements.txt checksum
+  shell: echo "{{ new_requirements_txt.stat.checksum }}" > {{ app_dir }}/.requirements.txt.checksum
+  when: dependencies_changed and new_requirements_txt.stat.exists
+
+- name: Set build status
+  set_fact:
+    build_completed: "{{ python_build_files.results | selectattr('stat.exists') | list | length > 0 and not (skip_build | default(false)) }}"
