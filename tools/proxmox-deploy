@@ -214,7 +214,7 @@ case "$CMD" in
   generate)
     ensure_templates
     TEMPLATES_ROOT="$TEMPLATES_ROOT" PROJECT_ROOT_OVERRIDE="$PROJECT_ROOT_OVERRIDE" \
-      bash "$TEMPLATES_ROOT/deployment-templates/generators/generate-multi-service.sh" "$@"
+      bash "$TEMPLATES_ROOT/deployment-templates/generators/generate.sh" "$@"
     ;;
   create)
     # Interactive service generation (migrated from manage-services.sh)

@@ -123,7 +123,7 @@ If tab completion stops working:
 
 ```bash
 # Quick fix - reinstall completion
-./tools/install-completion.sh
+./tools/install.sh --no-templates  # Only reinstall completion
 
 # Manual fix - source completion in current shell
 source tools/pxdcli-completion.bash

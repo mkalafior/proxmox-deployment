@@ -45,7 +45,7 @@ def merge_template(base_template_path, service_type_dir, output_path, service_na
             break
     
     # Insert the health_check_path variable
-    health_check_var = f"# Health check path from service configuration\n{% set health_check_path = '{health_check_path}' %}\n"
+    health_check_var = f"# Health check path from service configuration\n{{% set health_check_path = '{health_check_path}' %}}\n"
     lines.insert(insert_index, health_check_var)
     template_content = '\n'.join(lines)
     print(f"  ✓ Set health_check_path to: {health_check_path}")
