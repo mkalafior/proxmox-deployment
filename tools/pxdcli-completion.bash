@@ -46,7 +46,7 @@ _pxdcli_completion() {
                     # Don't provide completions, let user type service name
                     return 0
                     ;;
-                deploy|redeploy|cleanup|status|logs|restart|info|ssh|ip)
+                deploy|redeploy|cleanup|status|logs|restart|info|ssh|ip|update)
                     # Complete with available service names
                     if [[ "$prev" == "redeploy" ]]; then
                         # For redeploy, also support flags
@@ -61,9 +61,13 @@ _pxdcli_completion() {
                     return 0
                     ;;
                 update)
-                    # Complete with available service names or --force
-                    local services="$(_get_services)"
-                    COMPREPLY=($(compgen -W "$services --force" -- "$cur"))
+                    # Complete with available service names and update options
+                    if [[ "$cur" == --* ]]; then
+                        COMPREPLY=($(compgen -W "--dry-run --force --no-backup --verbose --type --file --help" -- "$cur"))
+                    else
+                        local services="$(_get_services)"
+                        COMPREPLY=($(compgen -W "$services" -- "$cur"))
+                    fi
                     return 0
                     ;;
                 redeploy-all)
@@ -128,30 +132,43 @@ _pxdcli_completion() {
                         esac
                         ;;
                     update)
-                        # Handle multiple service names and --force flag
-                        if [[ "$cur" == --* ]]; then
-                            COMPREPLY=($(compgen -W "--force" -- "$cur"))
-                        else
-                            # Complete with services not already mentioned
-                            local services="$(_get_services)"
-                            local mentioned_services=""
-                            for ((i=2; i<COMP_CWORD; i++)); do
-                                if [[ "${COMP_WORDS[i]}" != --* ]]; then
-                                    mentioned_services="$mentioned_services ${COMP_WORDS[i]}"
+                        # Handle update command options and service names
+                        case "$prev" in
+                            --type)
+                                COMPREPLY=($(compgen -W "$service_types" -- "$cur"))
+                                return 0
+                                ;;
+                            --file)
+                                local template_files="deploy.yml.j2 redeploy.yml.j2 cleanup.yml.j2 group_vars/all.yml.j2"
+                                COMPREPLY=($(compgen -W "$template_files" -- "$cur"))
+                                return 0
+                                ;;
+                            *)
+                                if [[ "$cur" == --* ]]; then
+                                    COMPREPLY=($(compgen -W "--dry-run --force --no-backup --verbose --type --file --help" -- "$cur"))
+                                else
+                                    # Complete with services not already mentioned
+                                    local services="$(_get_services)"
+                                    local mentioned_services=""
+                                    for ((i=2; i<COMP_CWORD; i++)); do
+                                        if [[ "${COMP_WORDS[i]}" != --* && "${COMP_WORDS[i-1]}" != "--type" && "${COMP_WORDS[i-1]}" != "--file" ]]; then
+                                            mentioned_services="$mentioned_services ${COMP_WORDS[i]}"
+                                        fi
+                                    done
+                                    
+                                    # Filter out already mentioned services
+                                    local available_services=""
+                                    for service in $services; do
+                                        if [[ ! " $mentioned_services " =~ " $service " ]]; then
+                                            available_services="$available_services $service"
+                                        fi
+                                    done
+                                    
+                                    COMPREPLY=($(compgen -W "$available_services" -- "$cur"))
                                 fi
-                            done
-                            
-                            # Filter out already mentioned services
-                            local available_services=""
-                            for service in $services; do
-                                if [[ ! " $mentioned_services " =~ " $service " ]]; then
-                                    available_services="$available_services $service"
-                                fi
-                            done
-                            
-                            COMPREPLY=($(compgen -W "$available_services --force" -- "$cur"))
-                        fi
-                        return 0
+                                return 0
+                                ;;
+                        esac
                         ;;
                     *)
                         return 0
