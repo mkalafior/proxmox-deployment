@@ -1,0 +1,12 @@
+---
+# Tor proxy service requirements - includes base requirements
+collections:
+  # Base collections (inherited)
+  - name: ansible.posix
+    version: ">=1.5.0"
+  
+  - name: community.general
+    version: ">=7.0.0"
+  
+  - name: community.crypto
+    version: ">=2.0.0"

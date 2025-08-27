@@ -1,0 +1,32 @@
+---
+# Database service requirements - dynamically includes only needed database collections
+collections:
+  # Base collections (always needed)
+  - name: ansible.posix
+    version: ">=1.5.0"
+  
+  - name: community.general
+    version: ">=7.0.0"
+  
+  - name: community.crypto
+    version: ">=2.0.0"
+  
+  # Database-specific collections (only include what's needed)
+{% if database_runtime == 'postgresql' or database_runtime == 'postgres' %}
+  - name: community.postgresql
+    version: ">=3.0.0"
+{% endif %}
+
+{% if database_runtime == 'mysql' or database_runtime == 'mariadb' %}
+  - name: community.mysql
+    version: ">=3.0.0"
+{% endif %}
+
+{% if database_runtime == 'mongodb' or database_runtime == 'mongo' %}
+  - name: community.mongodb
+    version: ">=1.0.0"
+{% endif %}
+
+{% if database_runtime == 'redis' %}
+  # Redis doesn't need special collections, uses community.general
+{% endif %}

@@ -1,0 +1,312 @@
+#!/bin/bash
+
+set -euo pipefail
+
+# Script to stop and remove all Proxmox containers with a specified project tag
+# Usage: ./cleanup-proxmox-dev [TAG] [--dry-run] [--force]
+
+DRY_RUN=false
+FORCE=false
+PROJECT_TAG="proxmox-dev"  # Default tag
+
+# Parse command line arguments
+while [[ $# -gt 0 ]]; do
+  case $1 in
+    --dry-run)
+      DRY_RUN=true
+      shift
+      ;;
+    --force)
+      FORCE=true
+      shift
+      ;;
+    --help|-h)
+      echo "Usage: $0 [TAG] [--dry-run] [--force]"
+      echo ""
+      echo "Stop and remove all Proxmox containers with the specified project tag"
+      echo "Default tag: $PROJECT_TAG"
+      echo ""
+      echo "Options:"
+      echo "  --dry-run    Show what would be done without actually doing it"
+      echo "  --force      Skip confirmation prompt"
+      echo "  --help, -h   Show this help message"
+      echo ""
+      echo "Environment variables required:"
+      echo "  PROXMOX_HOST      - Proxmox server hostname/IP"
+      echo "  PROXMOX_NODE      - Proxmox node name (default: pve)"
+      echo "  TOKEN_ID          - Proxmox API token ID"
+      echo "  TOKEN_SECRET      - Proxmox API token secret"
+      echo ""
+      echo "Examples:"
+      echo "  export PROXMOX_HOST=192.168.1.100"
+      echo "  export TOKEN_ID=root@pam!deploy-token"
+      echo "  export TOKEN_SECRET=your-secret-here"
+      echo "  $0 proxmox-dev --dry-run    # Clean up containers with 'proxmox-dev' tag"
+      echo "  $0 my-project --force       # Clean up containers with 'my-project' tag"
+      echo "  $0 --dry-run                # Clean up containers with default tag"
+      exit 0
+      ;;
+    --*)
+      echo "Unknown option: $1"
+      echo "Use --help for usage information"
+      exit 1
+      ;;
+    *)
+      # First non-option argument is the tag
+      if [[ -z "${PROJECT_TAG_SET:-}" ]]; then
+        PROJECT_TAG="$1"
+        PROJECT_TAG_SET=true
+        shift
+      else
+        echo "Unknown argument: $1"
+        echo "Use --help for usage information"
+        exit 1
+      fi
+      ;;
+  esac
+done
+
+# Load environment variables from .env file if it exists
+if [[ -f .env ]]; then
+  echo "📄 Loading environment from .env file..."
+  set -a
+  source .env
+  set +a
+fi
+
+# Validate required environment variables
+PROXMOX_HOST="${PROXMOX_HOST:-}"
+PROXMOX_NODE="${PROXMOX_NODE:-pve}"
+TOKEN_ID="${TOKEN_ID:-}"
+TOKEN_SECRET="${TOKEN_SECRET:-}"
+
+if [[ -z "$PROXMOX_HOST" ]]; then
+  echo "❌ Error: PROXMOX_HOST environment variable is required"
+  exit 1
+fi
+
+if [[ -z "$TOKEN_ID" || -z "$TOKEN_SECRET" ]]; then
+  echo "❌ Error: TOKEN_ID and TOKEN_SECRET environment variables are required"
+  echo "   Set up API token authentication in Proxmox first"
+  exit 1
+fi
+
+# Function to make Proxmox API calls
+proxmox_api() {
+  local method="$1"
+  local endpoint="$2"
+  local data="${3:-}"
+  
+  local curl_args=(
+    -k
+    -X "$method"
+    -H "Authorization: PVEAPIToken=${TOKEN_ID}=${TOKEN_SECRET}"
+    -H "Content-Type: application/x-www-form-urlencoded"
+    --max-time 30
+    --silent
+    --show-error
+  )
+  
+  if [[ -n "$data" ]]; then
+    curl_args+=(-d "$data")
+  fi
+  
+  curl "${curl_args[@]}" "https://${PROXMOX_HOST}:8006/api2/json${endpoint}"
+}
+
+# Function to get all containers
+get_all_containers() {
+  echo "🔍 Fetching all containers from Proxmox node '$PROXMOX_NODE'..."
+  proxmox_api "GET" "/nodes/${PROXMOX_NODE}/lxc"
+}
+
+# Function to filter containers by tag
+filter_containers_by_tag() {
+  local containers_json="$1"
+  local tag="$2"
+  
+  # Use jq to filter containers that have the specified tag
+  echo "$containers_json" | jq -r --arg tag "$tag" '
+    .data[] | 
+    select(.tags and (.tags | split(",") | map(gsub("^\\s+|\\s+$";"")) | index($tag))) |
+    "\(.vmid):\(.name):\(.status):\(.tags)"
+  '
+}
+
+# Function to stop a container
+stop_container() {
+  local vmid="$1"
+  local name="$2"
+  local status="$3"
+  
+  if [[ "$status" == "running" ]]; then
+    echo "⏹️  Stopping container $vmid ($name)..."
+    if [[ "$DRY_RUN" == "false" ]]; then
+      local result
+      result=$(proxmox_api "POST" "/nodes/${PROXMOX_NODE}/lxc/${vmid}/status/stop" 2>&1)
+      if [[ $? -eq 0 ]]; then
+        echo "   ✅ Stop command sent successfully"
+        # Wait a moment for the container to stop
+        sleep 3
+      else
+        echo "   ⚠️  Warning: Stop command may have failed: $result"
+      fi
+    else
+      echo "   🔍 [DRY RUN] Would stop container $vmid"
+    fi
+  else
+    echo "⏸️  Container $vmid ($name) is already $status"
+  fi
+}
+
+# Function to remove a container
+remove_container() {
+  local vmid="$1"
+  local name="$2"
+  
+  echo "🗑️  Removing container $vmid ($name)..."
+  if [[ "$DRY_RUN" == "false" ]]; then
+    local result
+    result=$(proxmox_api "DELETE" "/nodes/${PROXMOX_NODE}/lxc/${vmid}" 2>&1)
+    if [[ $? -eq 0 ]]; then
+      echo "   ✅ Container removed successfully"
+    else
+      echo "   ❌ Error removing container: $result"
+      return 1
+    fi
+  else
+    echo "   🔍 [DRY RUN] Would remove container $vmid"
+  fi
+}
+
+# Main execution
+main() {
+  echo "🏷️  Proxmox Container Cleanup Script"
+  echo "   Target tag: $PROJECT_TAG"
+  echo "   Proxmox host: $PROXMOX_HOST"
+  echo "   Proxmox node: $PROXMOX_NODE"
+  echo "   Mode: $([ "$DRY_RUN" == "true" ] && echo "DRY RUN" || echo "LIVE")"
+  echo ""
+  
+  # Get all containers
+  local containers_response
+  containers_response=$(get_all_containers)
+  
+  if [[ $? -ne 0 ]]; then
+    echo "❌ Error: Failed to fetch containers from Proxmox API"
+    echo "   Response: $containers_response"
+    exit 1
+  fi
+  
+  # Check if response is valid JSON
+  if ! echo "$containers_response" | jq . >/dev/null 2>&1; then
+    echo "❌ Error: Invalid JSON response from Proxmox API"
+    echo "   Response: $containers_response"
+    exit 1
+  fi
+  
+  # Filter containers by tag
+  local tagged_containers
+  tagged_containers=$(filter_containers_by_tag "$containers_response" "$PROJECT_TAG")
+  
+  if [[ -z "$tagged_containers" ]]; then
+    echo "✅ No containers found with tag '$PROJECT_TAG'"
+    exit 0
+  fi
+  
+  echo "📋 Found containers with tag '$PROJECT_TAG':"
+  echo ""
+  
+  local container_count=0
+  local vmids=()
+  local names=()
+  local statuses=()
+  
+  # Parse and display containers
+  while IFS=':' read -r vmid name status tags; do
+    if [[ -n "$vmid" ]]; then
+      echo "   • VMID: $vmid | Name: $name | Status: $status | Tags: $tags"
+      vmids+=("$vmid")
+      names+=("$name")
+      statuses+=("$status")
+      ((container_count++))
+    fi
+  done <<< "$tagged_containers"
+  
+  echo ""
+  echo "📊 Total containers to process: $container_count"
+  
+  if [[ $container_count -eq 0 ]]; then
+    echo "✅ No containers to process"
+    exit 0
+  fi
+  
+  # Confirmation prompt (unless --force or --dry-run)
+  if [[ "$FORCE" == "false" && "$DRY_RUN" == "false" ]]; then
+    echo ""
+    echo "⚠️  WARNING: This will STOP and REMOVE all containers listed above!"
+    echo "   This action cannot be undone."
+    echo ""
+    read -p "Are you sure you want to continue? (yes/no): " -r
+    if [[ ! $REPLY =~ ^[Yy][Ee][Ss]$ ]]; then
+      echo "❌ Operation cancelled by user"
+      exit 0
+    fi
+  fi
+  
+  echo ""
+  echo "🚀 Starting cleanup process..."
+  echo ""
+  
+  # Process each container
+  local success_count=0
+  local error_count=0
+  
+  for i in "${!vmids[@]}"; do
+    local vmid="${vmids[$i]}"
+    local name="${names[$i]}"
+    local status="${statuses[$i]}"
+    
+    echo "[$((i+1))/$container_count] Processing container $vmid ($name)..."
+    
+    # Stop the container first
+    if stop_container "$vmid" "$name" "$status"; then
+      # Then remove it
+      if remove_container "$vmid" "$name"; then
+        ((success_count++))
+      else
+        ((error_count++))
+      fi
+    else
+      echo "   ❌ Failed to stop container, skipping removal"
+      ((error_count++))
+    fi
+    
+    echo ""
+  done
+  
+  # Summary
+  echo "📊 Cleanup Summary:"
+  echo "   ✅ Successfully processed: $success_count containers"
+  if [[ $error_count -gt 0 ]]; then
+    echo "   ❌ Errors encountered: $error_count containers"
+  fi
+  echo ""
+  
+  if [[ "$DRY_RUN" == "true" ]]; then
+    echo "🔍 This was a dry run. No actual changes were made."
+    echo "   Run without --dry-run to perform the actual cleanup."
+  else
+    echo "✅ Cleanup completed!"
+  fi
+}
+
+# Check if jq is available
+if ! command -v jq &> /dev/null; then
+  echo "❌ Error: jq is required but not installed"
+  echo "   Install with: brew install jq (macOS) or apt-get install jq (Ubuntu)"
+  exit 1
+fi
+
+# Run main function
+main "$@"

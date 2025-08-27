@@ -33,22 +33,29 @@ def merge_template(base_template_path, service_type_dir, output_path, service_na
     # Extract health_check_path with override support
     health_check_path = service_override.get('health_check_path') or service_config.get('health_check_path', '/health')
     
-    # Add health_check_path variable definition at the top of the template
-    # Find the first task or play and insert the variable before it
+    # Add health_check_path as a variable in the vars section instead of Jinja2 set
+    # Find the vars_files section and add health_check_path after it
     lines = template_content.split('\n')
-    insert_index = 0
+    vars_files_end = -1
     
-    # Find where to insert the health_check_path variable (after the initial comments/metadata)
+    # Find the end of vars_files section
     for i, line in enumerate(lines):
-        if line.strip().startswith('- name:') or line.strip().startswith('- hosts:'):
-            insert_index = i
+        if 'vars_files:' in line:
+            # Look for the end of the vars_files list
+            for j in range(i + 1, len(lines)):
+                if lines[j].strip() and not lines[j].startswith('    -'):
+                    vars_files_end = j
+                    break
             break
     
-    # Insert the health_check_path variable
-    health_check_var = f"# Health check path from service configuration\n{{% set health_check_path = '{health_check_path}' %}}\n"
-    lines.insert(insert_index, health_check_var)
-    template_content = '\n'.join(lines)
-    print(f"  ✓ Set health_check_path to: {health_check_path}")
+    if vars_files_end > 0:
+        # Insert health_check_path as a variable
+        health_check_var = f"  vars:\n    health_check_path: \"{health_check_path}\""
+        lines.insert(vars_files_end, health_check_var)
+        template_content = '\n'.join(lines)
+        print(f"  ✓ Set health_check_path to: {health_check_path}")
+    else:
+        print(f"  ! Could not find vars_files section, health_check_path not set")
     
     # Define the include patterns and their corresponding files with conditional blocks
     includes = {

@@ -1,0 +1,14 @@
+---
+# Base Ansible collections required for all deployments
+collections:
+  # Core Ansible collections
+  - name: ansible.posix
+    version: ">=1.5.0"
+  
+  # Community general utilities
+  - name: community.general
+    version: ">=7.0.0"
+  
+  # Crypto collections for SSH key management
+  - name: community.crypto
+    version: ">=2.0.0"

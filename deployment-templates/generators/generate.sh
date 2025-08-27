@@ -39,19 +39,19 @@ show_help() {
     echo "🚀 Unified Service Generator"
     echo "Generates both service code and deployment configuration"
     echo ""
-    echo "Usage: $0 <service-name> --type <service-type> --port <port> [options]"
+    echo "Usage: $0 <service-name> --type <service-type> --port <port> --node <node> [options]"
     echo ""
     echo "Required:"
     echo "  service-name    Name of the service"
     echo "  --type TYPE     Service type: ${AVAILABLE_TYPES[*]}"
     echo "  --port PORT     Application port"
+    echo "  --node NODE     Proxmox node name"
     echo ""
     echo "Service Options:"
     echo "  --runtime RT    Runtime variant (nodejs: node|bun, database: postgresql|mysql|redis)"
     echo "  --main-file F   Main application file (default varies by type)"
     echo ""
     echo "VM Options:"
-    echo "  --node NODE     Proxmox node (will prompt if not specified)"
     echo "  --vm-id ID      VM ID (auto-selected if not specified)"
     echo "  --cores N       CPU cores (default: $DEFAULT_VM_CORES)"
     echo "  --memory MB     Memory in MB (default: $DEFAULT_VM_MEMORY)"
@@ -115,8 +115,26 @@ while [[ $# -gt 0 ]]; do
 done
 
 # Validate required arguments
-if [[ -z "$SERVICE_NAME" || -z "$SERVICE_TYPE" || -z "$APP_PORT" ]]; then
-    log_error "Missing required arguments"
+if [[ -z "$SERVICE_NAME" ]]; then
+    log_error "Missing required argument: service-name"
+    show_help
+    exit 1
+fi
+
+if [[ -z "$SERVICE_TYPE" ]]; then
+    log_error "Missing required argument: --type"
+    show_help
+    exit 1
+fi
+
+if [[ -z "$APP_PORT" ]]; then
+    log_error "Missing required argument: --port"
+    show_help
+    exit 1
+fi
+
+if [[ -z "$PROXMOX_NODE" ]]; then
+    log_error "Missing required argument: --node"
     show_help
     exit 1
 fi
@@ -128,8 +146,72 @@ if [[ ! " ${AVAILABLE_TYPES[*]} " =~ " ${SERVICE_TYPE} " ]]; then
     exit 1
 fi
 
+# Validate port is numeric
+if ! [[ "$APP_PORT" =~ ^[0-9]+$ ]]; then
+    log_error "Port must be a number: $APP_PORT"
+    exit 1
+fi
+
 # Set defaults
 SERVICE_HOSTNAME="${SERVICE_HOSTNAME:-$SERVICE_NAME}"
+
+# Function to get next available VM ID from Proxmox
+get_next_vm_id() {
+    # Check if we have required Proxmox credentials
+    if [[ -z "${PROXMOX_HOST:-}" || -z "${TOKEN_ID:-}" || -z "${TOKEN_SECRET:-}" ]]; then
+        log_error "Missing Proxmox credentials (PROXMOX_HOST, TOKEN_ID, TOKEN_SECRET)"
+        log_error "Cannot auto-assign VM ID. Please provide --vm-id explicitly"
+        return 1
+    fi
+    
+    # Get list of existing VM IDs
+    local url="https://${PROXMOX_HOST}:8006/api2/json/cluster/resources?type=vm"
+    local response
+    response=$(curl -ks -H "Authorization: PVEAPIToken=${TOKEN_ID}=${TOKEN_SECRET}" "$url" 2>/dev/null)
+    
+    if [[ $? -ne 0 || -z "$response" ]]; then
+        log_error "Failed to connect to Proxmox API at $PROXMOX_HOST"
+        return 1
+    fi
+    
+    # Extract VM IDs and find next available
+    local existing_ids
+    if command -v jq >/dev/null 2>&1; then
+        existing_ids=$(echo "$response" | jq -r '.data[]?.vmid // empty' | sort -n)
+    else
+        # Fallback without jq
+        existing_ids=$(echo "$response" | grep -o '"vmid":[0-9]*' | cut -d: -f2 | sort -n)
+    fi
+    
+    # Find next available ID starting from 100
+    local next_id=100
+    for id in $existing_ids; do
+        if [[ $next_id -eq $id ]]; then
+            ((next_id++))
+        elif [[ $next_id -lt $id ]]; then
+            break
+        fi
+    done
+    
+    echo "$next_id"
+}
+
+# Handle VM ID - only exception to strict validation
+if [[ -z "$VM_ID" ]]; then
+    log_info "VM ID not provided, attempting to auto-assign..."
+    VM_ID=$(get_next_vm_id)
+    if [[ -z "$VM_ID" ]]; then
+        log_error "Could not auto-assign VM ID. Please provide --vm-id explicitly"
+        exit 1
+    fi
+    log_info "Auto-assigned VM ID: $VM_ID"
+else
+    # Validate provided VM ID is numeric
+    if ! [[ "$VM_ID" =~ ^[0-9]+$ ]]; then
+        log_error "VM ID must be a number: $VM_ID"
+        exit 1
+    fi
+fi
 
 # Load service type configuration
 SERVICE_CONFIG_FILE="$TEMPLATES_BASE/service-types/$SERVICE_TYPE/config.yml"
@@ -200,34 +282,57 @@ create_service_files() {
 create_deployment_config() {
     log_step "Creating deployment configuration..."
     
-    mkdir -p "$DEPLOYMENT_DIR"/{group_vars,templates,scripts}
+    mkdir -p "$DEPLOYMENT_DIR"/{templates,scripts}
     
     # Generate service-config.yml
     if [[ -f "$DEPLOYMENT_DIR/service-config.yml" && "$FORCE_OVERWRITE" != "true" ]]; then
         log_info "Preserving existing service-config.yml"
     else
-        cat > "$DEPLOYMENT_DIR/service-config.yml" << EOF
-# Service configuration for $SERVICE_NAME
-service_name: $SERVICE_NAME
-service_type: $SERVICE_TYPE
-vm_id: ${VM_ID:-TBD}
+        log_info "Generating service-config.yml from template..."
+        
+        # Create temporary variables file for Ansible
+        local temp_vars_file="/tmp/service-vars-$$.yml"
+        cat > "$temp_vars_file" << EOF
+---
+service_name: "$SERVICE_NAME"
+service_type: "$SERVICE_TYPE"
+service_hostname: "$SERVICE_HOSTNAME"
+app_subdomain: "$APP_SUBDOMAIN"
+vm_name: "$SERVICE_NAME"
+vm_id: $VM_ID
 vm_cores: $VM_CORES
 vm_memory: $VM_MEMORY
 vm_disk_size: $VM_DISK_SIZE
+vm_storage: "local-lvm"
+vm_network_bridge: "vmbr0"
+vm_swap: 512
+vm_unprivileged: true
+app_name: "$SERVICE_NAME"
+app_user: "$APP_USER"
+app_dir: "/opt/$SERVICE_NAME"
+app_service_name: "$SERVICE_NAME"
 app_port: $APP_PORT
-app_user: $APP_USER
-app_dir: /opt/$SERVICE_NAME
-local_app_path: ../../services/$SERVICE_NAME
-service_hostname: $SERVICE_HOSTNAME
-app_subdomain: $APP_SUBDOMAIN
-proxmox_node: $PROXMOX_NODE
-
-# Health check configuration
-# Override the default health check path from service type if needed
-# health_check_path: "/custom/health"
+app_main_file: "${APP_MAIN_FILE:-index.js}"
+local_app_path: "../../services/$SERVICE_NAME"
+proxmox_node: "$PROXMOX_NODE"
+runtime_variant: "${RUNTIME_VARIANT:-}"
 EOF
-        [[ -n "$RUNTIME_VARIANT" ]] && echo "${SERVICE_TYPE}_runtime: $RUNTIME_VARIANT" >> "$DEPLOYMENT_DIR/service-config.yml"
-        log_info "Created service-config.yml"
+
+        # Use Ansible to render the template
+        ansible localhost -m template \
+            -a "src=$TEMPLATES_BASE/base/templates/service-config.yml.j2 dest=$DEPLOYMENT_DIR/service-config.yml" \
+            -e "@$temp_vars_file" \
+            --connection=local >/dev/null 2>&1
+        
+        # Clean up temporary file
+        rm -f "$temp_vars_file"
+        
+        if [[ -f "$DEPLOYMENT_DIR/service-config.yml" ]]; then
+            log_info "Created service-config.yml from template"
+        else
+            log_error "Failed to generate service-config.yml from template"
+            exit 1
+        fi
     fi
     
     # Copy service-specific templates (priority)
@@ -253,7 +358,7 @@ EOF
     # Copy base templates (fallback only)
     local base_templates_dir="$TEMPLATES_BASE/base/templates"
     if [[ -d "$base_templates_dir" ]]; then
-        find "$base_templates_dir" -name "*.j2" | while read -r template; do
+        find "$base_templates_dir" -name "*.j2" -o -name "*.yml" | while read -r template; do
             local template_name=$(basename "$template")
             local target="$DEPLOYMENT_DIR/templates/$template_name"
             if [[ ! -f "$target" ]]; then
@@ -278,15 +383,52 @@ EOF
         log_info "Created deploy.yml (no merger available)"
     fi
     
-    # Generate group_vars/all.yml (prefer service-specific)
-    local group_vars_template="$TEMPLATES_BASE/base/group_vars/all.yml.j2"
-    if [[ -f "$service_templates_dir/group_vars/all.yml.j2" ]]; then
-        group_vars_template="$service_templates_dir/group_vars/all.yml.j2"
+    # Generate global-config.yml (shared across all deployments)
+    local deployments_root="$(dirname "$DEPLOYMENT_DIR")"
+    local global_config_path="$deployments_root/global-config.yml"
+    local global_config_template="$TEMPLATES_BASE/base/global-config.yml.j2"
+    
+    if [[ ! -f "$global_config_path" && -f "$global_config_template" ]]; then
+        log_info "Generating global-config.yml from template..."
+        
+        # Use Ansible to render the global config template
+        ansible localhost -m template \
+            -a "src=$global_config_template dest=$global_config_path" \
+            --connection=local >/dev/null 2>&1
+        
+        if [[ -f "$global_config_path" ]]; then
+            log_info "Created global-config.yml"
+        else
+            log_error "Failed to generate global-config.yml from template"
+            exit 1
+        fi
+    elif [[ -f "$global_config_path" ]]; then
+        log_info "Preserving existing global-config.yml"
     fi
     
-    if [[ -f "$group_vars_template" ]]; then
-        cp "$group_vars_template" "$DEPLOYMENT_DIR/group_vars/all.yml"
-        log_info "Created group_vars/all.yml"
+    # Generate requirements.yml (base + service-specific template support)
+    local base_requirements="$TEMPLATES_BASE/base/requirements.yml"
+    local service_requirements_template="$service_templates_dir/requirements.yml.j2"
+    local target_requirements="$DEPLOYMENT_DIR/requirements.yml"
+    
+    if [[ -f "$service_requirements_template" ]]; then
+        # Render service-specific requirements template
+        local template_vars="{\"service_name\":\"$SERVICE_NAME\",\"service_type\":\"$SERVICE_TYPE\""
+        [[ -n "$RUNTIME_VARIANT" ]] && template_vars+=",\"database_runtime\":\"$RUNTIME_VARIANT\",\"${SERVICE_TYPE}_runtime\":\"$RUNTIME_VARIANT\""
+        template_vars+="}"
+        
+        if command -v j2 >/dev/null 2>&1; then
+            echo "$template_vars" | j2 "$service_requirements_template" -f json -o "$target_requirements"
+            log_info "Created requirements.yml (service-specific template)"
+        else
+            # Fallback: basic substitution
+            sed "s/{{ database_runtime }}/$RUNTIME_VARIANT/g; s/{{ ${SERVICE_TYPE}_runtime }}/$RUNTIME_VARIANT/g" "$service_requirements_template" > "$target_requirements"
+            log_info "Created requirements.yml (basic substitution)"
+        fi
+    elif [[ -f "$base_requirements" ]]; then
+        # Fall back to base requirements
+        cp "$base_requirements" "$target_requirements"
+        log_info "Created requirements.yml (base)"
     fi
     
     # Generate redeploy.yml using Python template merger (for code-based services)
@@ -358,6 +500,9 @@ EOF
 #!/bin/bash
 set -euo pipefail
 
+# ⚠️  RECOMMENDED: Use 'pxdcli deploy <service-name>' instead of calling this script directly
+# This script requires proper environment variables to be loaded
+
 # Load environment configuration
 source "$(dirname "$0")/load-env.sh"
 load_all_env
@@ -374,6 +519,9 @@ EOF
         cat > "$DEPLOYMENT_DIR/redeploy.sh" << 'EOF'
 #!/bin/bash
 set -euo pipefail
+
+# ⚠️  RECOMMENDED: Use 'pxdcli redeploy <service-name>' instead of calling this script directly
+# This script requires proper environment variables to be loaded
 
 # Parse command line arguments
 SKIP_BUILD=false
@@ -458,10 +606,9 @@ main() {
     echo ""
     echo "🚀 Next steps:"
     echo "   1. Customize service code: $SERVICE_DIR"
-    echo "   2. Deploy: cd $DEPLOYMENT_DIR && ./deploy.sh"
+    echo "   2. Deploy: pxdcli deploy $SERVICE_NAME"
     if [[ "$SERVICE_TYPE" =~ ^(nodejs|python|golang|static)$ ]]; then
-        echo "   3. Redeploy code changes: cd $DEPLOYMENT_DIR && ./redeploy.sh"
-        echo "      Or use: pxdcli redeploy $SERVICE_NAME"
+        echo "   3. Redeploy code changes: pxdcli redeploy $SERVICE_NAME"
     fi
 }
 

@@ -1,0 +1,53 @@
+---
+# Global infrastructure configuration for all deployments
+# This file is shared across all services in the deployments directory
+# Edit this file to customize your infrastructure settings
+
+# Proxmox Infrastructure Configuration
+# These values use Ansible's lookup function to get values from environment variables
+# with sensible defaults. You can override any of these values directly.
+proxmox_host: "{{ lookup('env', 'PROXMOX_HOST') | default('192.168.1.100') }}"
+proxmox_user: "{{ lookup('env', 'PROXMOX_USER') | default('root@pam') }}"
+proxmox_password: "{{ lookup('env', 'PROXMOX_PASSWORD') | default('') }}"
+proxmox_node: "{{ lookup('env', 'PROXMOX_NODE') | default('pve') }}"
+proxmox_api_validate_certs: false
+
+# Proxmox API Token Authentication (preferred for automation)
+proxmox_token_id: "{{ lookup('env', 'TOKEN_ID') | default('') }}"
+proxmox_token_secret: "{{ lookup('env', 'TOKEN_SECRET') | default('') }}"
+
+# Default VM Configuration
+vm_storage: "{{ lookup('env', 'VM_STORAGE') | default('local-lvm') }}"
+vm_network_bridge: "{{ lookup('env', 'VM_NETWORK_BRIDGE') | default('vmbr0') }}"
+vm_os_template: "{{ lookup('env', 'VM_TEMPLATE') | default('local:vztmpl/ubuntu-24.04-standard_24.04-2_amd64.tar.zst') }}"
+
+# DNS Infrastructure Configuration
+dns_server: "{{ lookup('env', 'DNS_SERVER') | default('192.168.1.11') }}"
+dns_domain: "{{ lookup('env', 'DNS_DOMAIN') | default('proxmox.local') }}"
+
+# Security Configuration
+ssh_public_key_path: "{{ lookup('env', 'HOME') }}/.ssh/id_proxmox.pub"
+
+# Default Firewall Ports (services can add more in their service-config.yml)
+default_allowed_ports:
+  - "22"    # SSH
+  - "80"    # HTTP
+  - "443"   # HTTPS
+
+# Container Tagging Configuration
+project_tag: "{{ lookup('env', 'PROJECT_TAG') | default('') }}"
+
+# Cloudflare Configuration (optional)
+cloudflare_domain: "{{ lookup('env', 'CLOUDFLARE_DOMAIN') | default('') }}"
+
+# Default VM Resource Limits
+default_vm_cores: 2
+default_vm_memory: 2048  # MB
+default_vm_disk_size: 20  # GB
+default_vm_swap: 512  # MB
+default_vm_unprivileged: true
+
+# Production Environment Defaults
+default_production_env:
+  NODE_ENV: production
+  HOST: "0.0.0.0"

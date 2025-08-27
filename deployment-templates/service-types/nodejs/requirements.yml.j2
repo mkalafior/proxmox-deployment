@@ -1,0 +1,14 @@
+---
+# Node.js service requirements - includes base requirements only
+collections:
+  # Base collections (always needed)
+  - name: ansible.posix
+    version: ">=1.5.0"
+  
+  - name: community.general
+    version: ">=7.0.0"
+  
+  - name: community.crypto
+    version: ">=2.0.0"
+  
+  # Node.js services don't need additional collections beyond base

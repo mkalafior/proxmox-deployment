@@ -5,7 +5,8 @@
   connection: local
   gather_facts: true
   vars_files:
-    - group_vars/all.yml
+    - ../global-config.yml
+    - service-config.yml
   
   tasks:
     - name: Check if container already exists
@@ -335,7 +336,8 @@
   hosts: proxmox_containers
   become: true
   vars_files:
-    - group_vars/all.yml
+    - ../global-config.yml
+    - service-config.yml
 
   tasks:
     - name: Normalize db_type from runtime_variant if undefined

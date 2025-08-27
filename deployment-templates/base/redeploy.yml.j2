@@ -6,7 +6,8 @@
   connection: local
   gather_facts: true
   vars_files:
-    - group_vars/all.yml
+    - ../global-config.yml
+    - service-config.yml
   
   tasks:
     - name: Validate service configuration
@@ -94,11 +95,53 @@
         ansible_user: root
         ansible_ssh_private_key_file: "{{ ssh_public_key_path | replace('.pub', '') }}"
 
+    - name: Detect local custom deployment script
+      stat:
+        path: "{{ playbook_dir }}/scripts/custom_script.sh"
+      register: local_custom_script
+      become: false
+
+    - name: Copy custom deployment script to temporary location
+      copy:
+        src: "{{ playbook_dir }}/scripts/custom_script.sh"
+        dest: "/tmp/{{ service_name }}-custom_script.sh"
+        mode: '0755'
+      when: hostvars['localhost']['local_custom_script'].stat.exists
+      become: false
+
+    - name: Create application tar archive on localhost
+      shell: |
+        cd {{ local_app_path }}
+        # Check if .deployignore exists and build exclude options
+        EXCLUDE_OPTS=""
+        if [ -f .deployignore ]; then
+          # Read .deployignore and convert to tar exclude options
+          while IFS= read -r line || [ -n "$line" ]; do
+            # Skip empty lines and comments
+            if [[ -n "$line" && ! "$line" =~ ^[[:space:]]*# ]]; then
+              # Remove leading/trailing whitespace
+              line=$(echo "$line" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+              if [[ -n "$line" ]]; then
+                EXCLUDE_OPTS="$EXCLUDE_OPTS --exclude='$line'"
+              fi
+            fi
+          done < .deployignore
+        else
+          # Default exclusions if no .deployignore file
+          EXCLUDE_OPTS="--exclude='node_modules' --exclude='.git' --exclude='deployment' --exclude='deployments' --exclude='*.log' --exclude='.env'"
+        fi
+        
+        # Create tar with dynamic exclusions
+        eval "tar $EXCLUDE_OPTS -czf /tmp/{{ service_name }}-redeploy.tar.gz ."
+      become: false
+      when: container_ip is defined
+
 - name: Execute code redeployment on {{ service_name }}
   hosts: proxmox_containers
   become: true
   vars_files:
-    - group_vars/all.yml
+    - ../global-config.yml
+    - service-config.yml
   
   tasks:
     - name: Wait for system to be ready
@@ -137,35 +180,8 @@
         state: stopped
       when: current_service_status.status.ActiveState == "active"
 
-    - name: Copy application files using tar
+    - name: Copy and extract application files
       block:
-        - name: Create tar archive of application
-          shell: |
-            cd {{ local_app_path }}
-            # Check if .deployignore exists and build exclude options
-            EXCLUDE_OPTS=""
-            if [ -f .deployignore ]; then
-              # Read .deployignore and convert to tar exclude options
-              while IFS= read -r line || [ -n "$line" ]; do
-                # Skip empty lines and comments
-                if [[ -n "$line" && ! "$line" =~ ^[[:space:]]*# ]]; then
-                  # Remove leading/trailing whitespace
-                  line=$(echo "$line" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
-                  if [[ -n "$line" ]]; then
-                    EXCLUDE_OPTS="$EXCLUDE_OPTS --exclude='$line'"
-                  fi
-                fi
-              done < .deployignore
-            else
-              # Default exclusions if no .deployignore file
-              EXCLUDE_OPTS="--exclude='node_modules' --exclude='.git' --exclude='deployment' --exclude='deployments' --exclude='*.log' --exclude='.env'"
-            fi
-            
-            # Create tar with dynamic exclusions
-            eval "tar $EXCLUDE_OPTS -czf /tmp/{{ service_name }}-redeploy.tar.gz ."
-          delegate_to: localhost
-          become: false
-
         - name: Copy tar archive to container
           copy:
             src: "/tmp/{{ service_name }}-redeploy.tar.gz"
@@ -185,12 +201,7 @@
             path: "/tmp/{{ service_name }}-redeploy.tar.gz"
             state: absent
 
-        - name: Clean up local tar file
-          file:
-            path: "/tmp/{{ service_name }}-redeploy.tar.gz"
-            state: absent
-          delegate_to: localhost
-          become: false
+
 
     - name: Set ownership of application files
       file:
@@ -203,6 +214,36 @@
     {% if service_redeploy_tasks is defined and service_redeploy_tasks %}
     {% include 'service-parts/redeploy_tasks.yml.j2' %}
     {% endif %}
+
+    - name: Upload custom deployment script to container
+      copy:
+        src: "/tmp/{{ service_name }}-custom_script.sh"
+        dest: "/opt/custom_script.sh"
+        mode: '0755'
+        owner: root
+        group: root
+      when: hostvars['localhost']['local_custom_script'].stat.exists
+
+    - name: Run custom deployment script (service-specific hook)
+      shell: "/opt/custom_script.sh"
+      args:
+        chdir: "{{ app_dir }}"
+      become_user: "{{ app_user }}"
+      environment:
+        APP_DIR: "{{ app_dir }}"
+        SERVICE_TYPE: "{{ service_type | default('') }}"
+        NODEJS_RUNTIME: "{{ nodejs_runtime | default('') }}"
+        APP_PORT: "{{ app_port | string }}"
+        SERVICE_NAME: "{{ service_name }}"
+      register: custom_script_result
+      changed_when: false
+      failed_when: false
+      when: hostvars['localhost']['local_custom_script'].stat.exists
+
+    - name: Show custom script output
+      debug:
+        var: custom_script_result.stdout_lines
+      when: hostvars['localhost']['local_custom_script'].stat.exists
 
     - name: Update environment file
       template:
@@ -273,3 +314,26 @@
         - name: Notify rollback
           debug:
             msg: "Rollback completed. Service restored from backup."
+
+# Cleanup play - runs on localhost after redeployment completes
+- name: Cleanup redeployment artifacts
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars_files:
+    - ../global-config.yml
+    - service-config.yml
+  
+  tasks:
+    - name: Clean up local tar file after redeployment
+      file:
+        path: "/tmp/{{ service_name }}-redeploy.tar.gz"
+        state: absent
+      become: false
+
+    - name: Clean up temporary custom script
+      file:
+        path: "/tmp/{{ service_name }}-custom_script.sh"
+        state: absent
+      when: hostvars['localhost']['local_custom_script'].stat.exists
+      become: false

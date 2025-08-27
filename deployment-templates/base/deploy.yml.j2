@@ -5,7 +5,8 @@
   connection: local
   gather_facts: true
   vars_files:
-    - group_vars/all.yml
+    - ../global-config.yml
+    - service-config.yml
   
   tasks:
     - name: Validate environment variables
@@ -22,15 +23,14 @@
           Either set API token (TOKEN_ID, TOKEN_SECRET) or username/password (PROXMOX_USER, PROXMOX_PASSWORD).
           API tokens are recommended for automation.
 
-    - name: Debug environment variables
+    - name: Debug configuration
       debug:
         msg: |
-          Environment Debug for {{ service_name }}:
-          - PROXMOX_HOST: {{ lookup('env', 'PROXMOX_HOST') | default('not set') }}
-          - PROXMOX_USER: {{ lookup('env', 'PROXMOX_USER') | default('not set') }}
-          - PROXMOX_PASSWORD: {{ 'SET' if lookup('env', 'PROXMOX_PASSWORD') != '' else 'not set' }}
-          - TOKEN_ID: {{ lookup('env', 'TOKEN_ID') | default('not set') }}
-          - TOKEN_SECRET: {{ 'SET' if lookup('env', 'TOKEN_SECRET') != '' else 'not set' }}
+          Configuration Debug for {{ service_name }}:
+          - PROXMOX_HOST: {{ proxmox_host }}
+          - PROXMOX_USER: {{ proxmox_user }}
+          - TOKEN_ID: {{ proxmox_token_id | default('not set') }}
+          - TOKEN_SECRET: {{ 'SET' if proxmox_token_secret != '' else 'not set' }}
           
           Service Configuration:
           - Service Name: {{ service_name }}
@@ -46,10 +46,9 @@
     - name: Display container tags
       debug:
         msg: |
-          Container will be created with tags: {{ container_tags_string }}
+          Container will be created with tags: {{ (container_tags + ([project_tag] if project_tag != '' else [])) | join(',') }}
           📋 Tags breakdown:
-          - proxmox-deploy (automatic)
-          - {{ service_name }} (service name)
+          {% for tag in container_tags %}- {{ tag }}{% endfor %}
           {% if project_tag != '' %}- {{ project_tag }} (project tag){% endif %}
           {% if project_tag == '' %}💡 Set PROJECT_TAG environment variable to add a project-specific tag{% endif %}
 
@@ -80,20 +79,42 @@
       run_once: true
       become: false
 
+    - name: Debug Proxmox API request details
+      debug:
+        msg: |
+          🔍 Proxmox API Request Details:
+          URL: https://{{ proxmox_host }}:8006/api2/json/nodes/{{ proxmox_node }}/lxc
+          Method: POST
+          VM ID: {{ vm_id }}
+          Node: {{ proxmox_node }}
+          Template: {{ vm_os_template }}
+          Storage: {{ vm_storage }}:{{ vm_disk_size }}
+          Resources: {{ vm_cores }}C/{{ vm_memory }}MB/{{ vm_swap }}MB swap
+          Network: {{ vm_network_bridge }}
+          Tags: {{ (container_tags + ([project_tag] if project_tag != '' else [])) | join(',') }}
+
     - name: Create Proxmox container via curl command
       shell: |
-        curl -k -X POST \
+        echo "🌐 Executing curl command..."
+        echo "📡 Request URL: https://{{ proxmox_host }}:8006/api2/json/nodes/{{ proxmox_node }}/lxc"
+        echo "📋 Request data: vmid={{ vm_id }}&unprivileged={{ (vm_unprivileged | default(true)) | ternary('1', '0') }}&features=nesting%3D1&..."
+        echo ""
+        curl -k -v -X POST \
           -H "Authorization: PVEAPIToken={{ proxmox_token_id }}={{ proxmox_token_secret }}" \
           -H "Content-Type: application/x-www-form-urlencoded" \
-          -d "vmid={{ vm_id }}&unprivileged=1&features=nesting%3D1&password={{ (lookup('password', '/tmp/vm_root_password chars=ascii_letters,digits length=16')) | urlencode }}{% if ssh_public_key_content is defined %}&ssh-public-keys={{ ssh_public_key_content.content | b64decode | trim | urlencode }}{% endif %}&ostemplate={{ vm_os_template | urlencode }}&rootfs={{ (vm_storage ~ ':' ~ vm_disk_size) | urlencode }}&cores={{ vm_cores }}&memory={{ vm_memory }}&swap={{ vm_swap }}&net0={{ ('name=eth0,bridge=' ~ vm_network_bridge ~ ',firewall=1,ip=dhcp') | urlencode }}&tags={{ container_tags_string | urlencode }}" \
+          -d "vmid={{ vm_id }}&unprivileged={{ (vm_unprivileged | default(true)) | ternary('1', '0') }}&features=nesting%3D1&password={{ (lookup('password', '/tmp/vm_root_password chars=ascii_letters,digits length=16')) | urlencode }}{% if ssh_public_key_content is defined %}&ssh-public-keys={{ ssh_public_key_content.content | b64decode | trim | urlencode }}{% endif %}&ostemplate={{ vm_os_template | urlencode }}&rootfs={{ (vm_storage ~ ':' ~ vm_disk_size) | urlencode }}&cores={{ vm_cores }}&memory={{ vm_memory }}&swap={{ vm_swap }}&net0={{ ('name=eth0,bridge=' ~ vm_network_bridge ~ ',firewall=1,ip=dhcp') | urlencode }}&tags={{ (container_tags + ([project_tag] if project_tag != '' else [])) | join(',') | urlencode }}" \
           "https://{{ proxmox_host }}:8006/api2/json/nodes/{{ proxmox_node }}/lxc"
       register: proxmox_vm
       failed_when: false
 
     - name: Debug container creation response
       debug:
-        var: proxmox_vm
-        verbosity: 1
+        msg: |
+          🔍 Proxmox API Response:
+          📡 URL: https://{{ proxmox_host }}:8006/api2/json/nodes/{{ proxmox_node }}/lxc
+          📋 Data: vmid={{ vm_id }}&unprivileged={{ (vm_unprivileged | default(true)) | ternary('1', '0') }}&features=nesting%3D1&...
+          📊 Exit Code: {{ proxmox_vm.rc }}
+          📄 Response: {{ proxmox_vm.stdout_lines[-1] if proxmox_vm.stdout_lines else 'No response' }}
 
     - name: Check if container creation was successful
       fail:
@@ -112,12 +133,16 @@
           5. Verify VM ID {{ vm_id }} is not already in use
 
           Run the debug script: ./tools/proxmox-debug.sh
-      when: proxmox_vm.rc != 0 or (proxmox_vm.stdout | default('')) == '' or ((proxmox_vm.stdout | from_json).data is not defined) or ((proxmox_vm.stdout | from_json).data is none)
+      when: >
+        proxmox_vm.rc != 0 or 
+        (proxmox_vm.stdout | default('')) == '' or 
+        not (proxmox_vm.stdout | regex_search('\\{.*\\}')) or
+        ((proxmox_vm.stdout | regex_search('\\{.*\\}')) | from_json).data == None
 
     - name: Extract UPID from successful container creation
       set_fact:
-        container_upid: "{{ (proxmox_vm.stdout | from_json).data }}"
-      when: proxmox_vm.rc == 0 and (proxmox_vm.stdout | from_json).data is defined
+        container_upid: "{{ ((proxmox_vm.stdout | regex_search('\\{.*\\}')) | from_json).data }}"
+      when: proxmox_vm.rc == 0 and (proxmox_vm.stdout | regex_search('\\{.*\\}'))
       
 
 
@@ -276,11 +301,57 @@
 
     # Note: We no longer persist IPs locally; use DNS/Proxmox API via CLI
 
+    - name: Detect local custom deployment script
+      stat:
+        path: "{{ playbook_dir }}/scripts/custom_script.sh"
+      register: local_custom_script
+      become: false
+
+    - name: Copy custom deployment script to temporary location
+      copy:
+        src: "{{ playbook_dir }}/scripts/custom_script.sh"
+        dest: "/tmp/{{ service_name }}-custom_script.sh"
+        mode: '0755'
+      when: local_custom_script.stat.exists
+      become: false
+
+    - name: Create application tar archive on localhost
+      shell: |
+        cd {{ local_app_path }}
+        # Check if .deployignore exists and build exclude options
+        EXCLUDE_OPTS=""
+        if [ -f .deployignore ]; then
+          # Read .deployignore and convert to tar exclude options
+          while IFS= read -r line || [ -n "$line" ]; do
+            # Skip empty lines and comments
+            if [[ -n "$line" && ! "$line" =~ ^[[:space:]]*# ]]; then
+              # Remove leading/trailing whitespace
+              line=$(echo "$line" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+              if [[ -n "$line" ]]; then
+                EXCLUDE_OPTS="$EXCLUDE_OPTS --exclude='$line'"
+              fi
+            fi
+          done < .deployignore
+        else
+          # Default exclusions if no .deployignore file
+          EXCLUDE_OPTS="--exclude='node_modules' --exclude='.git' --exclude='deployment' --exclude='deployments' --exclude='*.log' --exclude='.env'"
+        fi
+        
+        # Create tar with dynamic exclusions
+        eval "tar $EXCLUDE_OPTS -czf /tmp/{{ service_name }}-app.tar.gz ."
+      become: false
+      when: container_ip is defined
+
+
+
 - name: Configure container and deploy {{ service_name }} application
   hosts: proxmox_containers
   become: true
   vars_files:
-    - group_vars/all.yml
+    - ../global-config.yml
+    - service-config.yml
+  vars:
+    ansible_ssh_common_args: '-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null'
   
   tasks:
     - name: Wait for system to be ready
@@ -324,7 +395,7 @@
       ufw:
         rule: allow
         port: "{{ item }}"
-      loop: "{{ allowed_ports }}"
+      loop: "{{ default_allowed_ports + [app_port | string] + (additional_ports | default([])) }}"
 
     - name: Enable firewall
       ufw:
@@ -351,35 +422,8 @@
         group: "{{ app_user }}"
         mode: '0755'
 
-    - name: Copy application files using tar
+    - name: Copy and extract application files
       block:
-        - name: Create tar archive of application
-          shell: |
-            cd {{ local_app_path }}
-            # Check if .deployignore exists and build exclude options
-            EXCLUDE_OPTS=""
-            if [ -f .deployignore ]; then
-              # Read .deployignore and convert to tar exclude options
-              while IFS= read -r line || [ -n "$line" ]; do
-                # Skip empty lines and comments
-                if [[ -n "$line" && ! "$line" =~ ^[[:space:]]*# ]]; then
-                  # Remove leading/trailing whitespace
-                  line=$(echo "$line" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
-                  if [[ -n "$line" ]]; then
-                    EXCLUDE_OPTS="$EXCLUDE_OPTS --exclude='$line'"
-                  fi
-                fi
-              done < .deployignore
-            else
-              # Default exclusions if no .deployignore file
-              EXCLUDE_OPTS="--exclude='node_modules' --exclude='.git' --exclude='deployment' --exclude='deployments' --exclude='*.log' --exclude='.env'"
-            fi
-            
-            # Create tar with dynamic exclusions
-            eval "tar $EXCLUDE_OPTS -czf /tmp/{{ service_name }}-app.tar.gz ."
-          delegate_to: localhost
-          become: false
-
         - name: Copy tar archive to container
           copy:
             src: "/tmp/{{ service_name }}-app.tar.gz"
@@ -398,13 +442,6 @@
           file:
             path: "/tmp/{{ service_name }}-app.tar.gz"
             state: absent
-
-        - name: Clean up tar files on local machine
-          file:
-            path: "/tmp/{{ service_name }}-app.tar.gz"
-            state: absent
-          delegate_to: localhost
-          become: false
 
       when: service_type != 'database'
 
@@ -426,21 +463,14 @@
     {% include 'service-parts/build_tasks.yml.j2' %}
     {% endif %}
 
-    - name: Detect local custom deployment script
-      stat:
-        path: "{{ playbook_dir }}/scripts/custom_script.sh"
-      register: local_custom_script
-      delegate_to: localhost
-      become: false
-
     - name: Upload custom deployment script to container
       copy:
-        src: "{{ playbook_dir }}/scripts/custom_script.sh"
+        src: "/tmp/{{ service_name }}-custom_script.sh"
         dest: "/opt/custom_script.sh"
         mode: '0755'
         owner: root
         group: root
-      when: local_custom_script.stat.exists
+      when: hostvars['localhost']['local_custom_script'].stat.exists
 
     - name: Run custom deployment script (service-specific hook)
       shell: "/opt/custom_script.sh"
@@ -456,12 +486,12 @@
       register: custom_script_result
       changed_when: false
       failed_when: false
-      when: local_custom_script.stat.exists
+      when: hostvars['localhost']['local_custom_script'].stat.exists
 
     - name: Show custom script output
       debug:
         var: custom_script_result.stdout_lines
-      when: local_custom_script.stat.exists
+      when: hostvars['localhost']['local_custom_script'].stat.exists
 
     - name: Create environment file
       template:
@@ -588,19 +618,20 @@
           template:
             src: cloudflare-tunnel-config.yml.j2
             dest: /tmp/new_tunnel_config.yml
-          delegate_to: localhost
+          run_once: true
           
         - name: Upload new tunnel configuration
           copy:
             src: /tmp/new_tunnel_config.yml
             dest: /etc/cloudflared/config.yml
           delegate_to: "{{ proxmox_host }}"
+          run_once: true
           
         - name: Clean up temporary config file
           file:
             path: /tmp/new_tunnel_config.yml
             state: absent
-          delegate_to: localhost
+          run_once: true
           
         - name: Restart cloudflared service
           systemd:
@@ -674,7 +705,6 @@
         var: service_logs.stdout_lines
       when: service_type != 'database'
     {% endif %}
-    
 
   handlers:
     - name: reload systemd
@@ -688,3 +718,26 @@
       systemd:
         name: privoxy
         state: restarted
+
+# Cleanup play - runs on localhost after deployment completes
+- name: Cleanup deployment artifacts
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars_files:
+    - ../global-config.yml
+    - service-config.yml
+  
+  tasks:
+    - name: Clean up local tar file after deployment
+      file:
+        path: "/tmp/{{ service_name }}-app.tar.gz"
+        state: absent
+      become: false
+
+    - name: Clean up temporary custom script
+      file:
+        path: "/tmp/{{ service_name }}-custom_script.sh"
+        state: absent
+      when: hostvars['localhost']['local_custom_script'].stat.exists
+      become: false

@@ -5,9 +5,44 @@ set -euo pipefail
 CMD="${1:-help}"
 shift || true
 
+# Check for --remote-templates flag
+USE_REMOTE_TEMPLATES=false
+if [[ "$CMD" == "--remote-templates" ]]; then
+  USE_REMOTE_TEMPLATES=true
+  CMD="${1:-help}"
+  shift || true
+fi
+
 TEMPLATES_ROOT_DEFAULT="$HOME/.proxmox-deploy/templates"
-TEMPLATES_ROOT="${TEMPLATES_ROOT:-$TEMPLATES_ROOT_DEFAULT}"
 PROJECT_ROOT_OVERRIDE="${PROJECT_ROOT_OVERRIDE:-$(pwd)}"
+
+# Auto-detect if we're running from within the repository for development
+detect_local_templates() {
+  local script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  local repo_root="$(dirname "$script_dir")"
+  
+  # Check if we're in the proxmox-deploy-playground repository
+  if [[ -f "$repo_root/deployment-templates/generators/generate.sh" ]]; then
+    echo "$repo_root"
+  else
+    echo ""
+  fi
+}
+
+# Determine templates root: use local if in repo, otherwise use default
+LOCAL_REPO_ROOT="$(detect_local_templates)"
+if [[ -n "$LOCAL_REPO_ROOT" && -z "${TEMPLATES_ROOT:-}" && "$USE_REMOTE_TEMPLATES" == "false" ]]; then
+  TEMPLATES_ROOT="$LOCAL_REPO_ROOT"
+  echo "🔧 Using local templates from: $TEMPLATES_ROOT"
+  echo "📁 Template source: Local repository (development mode)"
+  echo "   - Base templates: $TEMPLATES_ROOT/deployment-templates/base/"
+  echo "   - Service types: $TEMPLATES_ROOT/deployment-templates/service-types/"
+  echo "   - Generators: $TEMPLATES_ROOT/deployment-templates/generators/"
+else
+  TEMPLATES_ROOT="${TEMPLATES_ROOT:-$TEMPLATES_ROOT_DEFAULT}"
+  echo "📁 Template source: Remote/cached templates"
+  echo "   - Templates root: $TEMPLATES_ROOT"
+fi
 
 # Helper: Auto-discover and load .env files
 load_env_files() {
@@ -65,9 +100,16 @@ load_env_files() {
 load_env_files
 
 ensure_templates() {
+  # Skip git operations if using local templates from the repository
+  if [[ -n "$LOCAL_REPO_ROOT" && "$TEMPLATES_ROOT" == "$LOCAL_REPO_ROOT" ]]; then
+    echo "📁 Using local repository templates (development mode)"
+    return 0
+  fi
+  
+  # Standard behavior: clone or update remote templates
   if [[ ! -d "$TEMPLATES_ROOT/.git" ]]; then
     mkdir -p "$(dirname "$TEMPLATES_ROOT")"
-    git clone --depth 1 https://github.com/your-org/proxmox-deploy-playground "$TEMPLATES_ROOT"
+    git clone --depth 1 https://github.com/mkalafior/proxmox-deploy-playground "$TEMPLATES_ROOT"
   else
     git -C "$TEMPLATES_ROOT" pull --ff-only || true
   fi
@@ -185,7 +227,11 @@ determine_units() {
 }
 
 usage() {
-  echo "pxdcli <command> [args]"
+  echo "pxdcli [--remote-templates] <command> [args]"
+  echo ""
+  echo "Options:"
+  echo "  --remote-templates                       # Force use of remote templates (skip local detection)"
+  echo ""
   echo "Commands:"
   echo "  generate <service> --type <type> [opts]  # Generate service with command-line args"
   echo "  create <service>                         # Interactive service generation"
@@ -281,7 +327,18 @@ case "$CMD" in
   deploy)
     svc="${1:-}"
     if [[ -z "$svc" ]]; then echo "Missing service name"; exit 1; fi
-    ( cd "$PROJECT_ROOT_OVERRIDE/deployments/$svc" && ./deploy.sh )
+    svc_dir="$PROJECT_ROOT_OVERRIDE/deployments/$svc"
+    echo "🚀 Deploying service..."
+    echo "📁 Service directory: $svc_dir"
+    if [[ ! -d "$svc_dir" ]]; then
+      echo "❌ Service directory not found: $svc_dir"
+      echo "💡 Available services:"
+      find "$PROJECT_ROOT_OVERRIDE/deployments" -mindepth 1 -maxdepth 1 -type d -exec basename {} \; 2>/dev/null | sort || echo "   (none found)"
+      exit 1
+    fi
+    echo "📋 Service files:"
+    ls -la "$svc_dir" | head -10
+    ( cd "$svc_dir" && ./deploy.sh )
     ;;
   redeploy)
     svc="${1:-}"

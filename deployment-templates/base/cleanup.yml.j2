@@ -5,7 +5,8 @@
   connection: local
   gather_facts: true
   vars_files:
-    - group_vars/all.yml
+    - ../global-config.yml
+    - service-config.yml
 
   tasks:
     - name: Validate environment variables
