@@ -271,23 +271,39 @@
         - container_interfaces_result.json is defined
         - container_interfaces_result.json.data is defined
 
-    - name: Fallback - get container IP via pct exec
-      shell: |
-        /usr/sbin/pct exec {{ vm_id }} -- sh -lc "ip -o -4 addr show dev eth0 | awk '{print \\$4}' | head -n1"
-      register: pct_ip_result
-      changed_when: false
-      ignore_errors: true
-      delegate_to: "{{ proxmox_host }}"
-      environment:
-        PATH: "/usr/sbin:/usr/bin:/bin:/sbin"
+    - name: Final attempt - query container status via API
+      uri:
+        url: "https://{{ proxmox_host }}:8006/api2/json/nodes/{{ proxmox_node }}/lxc/{{ vm_id }}/status/current"
+        method: GET
+        headers:
+          Authorization: "PVEAPIToken={{ proxmox_token_id }}={{ proxmox_token_secret }}"
+        validate_certs: "{{ proxmox_api_validate_certs }}"
+        timeout: 30
+        return_content: yes
+        status_code: [200, 401, 403, 500]
+      register: container_status_result
+      failed_when: false
       when: container_ip is not defined or (container_ip | default('')) == ''
 
-    - name: Set container_ip from pct fallback
-      set_fact:
-        container_ip: "{{ (pct_ip_result.stdout | default('')) | regex_replace('/.*$', '') }}"
-      when:
-        - pct_ip_result is defined
-        - (container_ip | default('')) == ''
+    - name: Debug final IP discovery attempt
+      debug:
+        msg: |
+          Final IP discovery attempt for {{ service_name }} (VM {{ vm_id }}):
+          
+          ⚠️  IP discovery via API failed. This may be due to:
+          - Container still starting up (network not ready)
+          - DHCP lease not yet assigned
+          - Network configuration issues
+          
+          💡 Manual steps to resolve:
+          1. Check container status in Proxmox web interface
+          2. Verify network configuration
+          3. Wait a few minutes and retry deployment
+          
+          🔧 Alternative: SSH directly to container if you know the IP
+      when: 
+        - container_ip is not defined or (container_ip | default('')) == ''
+        - container_status_result is defined
 
     - name: Fail if IP discovery failed
       fail:

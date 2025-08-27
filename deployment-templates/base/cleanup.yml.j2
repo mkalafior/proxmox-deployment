@@ -20,33 +20,83 @@
         fail_msg: |
           Required Proxmox authentication must be configured.
 
-    - name: Attempt DNS cleanup via systemd stop inside container (best-effort)
-      shell: |
-        /usr/sbin/pct exec {{ vm_id }} -- systemctl stop dns-register || true
-      delegate_to: "{{ proxmox_host }}"
-      environment:
-        PATH: "/usr/sbin:/usr/bin:/bin:/sbin"
-      register: dns_stop_result
+    - name: Get container IP for DNS cleanup
+      uri:
+        url: "https://{{ proxmox_host }}:8006/api2/json/nodes/{{ proxmox_node }}/lxc/{{ vm_id }}/interfaces"
+        method: GET
+        headers:
+          Authorization: "PVEAPIToken={{ proxmox_token_id }}={{ proxmox_token_secret }}"
+        validate_certs: "{{ proxmox_api_validate_certs }}"
+        timeout: 30
+        return_content: yes
+        status_code: [200, 404, 500]
+      register: container_interfaces_result
       failed_when: false
       changed_when: false
 
-    - name: Attempt DNS cleanup via script inside container (best-effort)
-      shell: |
-        /usr/sbin/pct exec {{ vm_id }} -- sh -lc "/opt/dns-register.sh cleanup || true"
-      delegate_to: "{{ proxmox_host }}"
-      environment:
-        PATH: "/usr/sbin:/usr/bin:/bin:/sbin"
+    - name: Set container IP from interfaces for DNS cleanup
+      set_fact:
+        cleanup_container_ip: "{{ (eth0_interface.inet | default('')) | regex_replace('/.*$', '') }}"
+      vars:
+        eth0_interface: "{{ container_interfaces_result.json.data | selectattr('name', 'equalto', 'eth0') | first }}"
+      when:
+        - container_interfaces_result is defined
+        - container_interfaces_result.json is defined
+        - container_interfaces_result.json.data is defined
+        - (container_interfaces_result.json.data | selectattr('name','equalto','eth0') | list | length) > 0
+
+    - name: Stop DNS registration service via API
+      uri:
+        url: "https://{{ proxmox_host }}:8006/api2/json/nodes/{{ proxmox_node }}/lxc/{{ vm_id }}/exec"
+        method: POST
+        headers:
+          Authorization: "PVEAPIToken={{ proxmox_token_id }}={{ proxmox_token_secret }}"
+          Content-Type: "application/x-www-form-urlencoded"
+        body: "command=systemctl&command=stop&command=dns-register"
+        validate_certs: "{{ proxmox_api_validate_certs }}"
+        status_code: [200, 404, 500]
+        timeout: 30
+      register: dns_stop_result
+      failed_when: false
+      changed_when: false
+      when: cleanup_container_ip is defined
+
+    - name: Run DNS cleanup script via API
+      uri:
+        url: "https://{{ proxmox_host }}:8006/api2/json/nodes/{{ proxmox_node }}/lxc/{{ vm_id }}/exec"
+        method: POST
+        headers:
+          Authorization: "PVEAPIToken={{ proxmox_token_id }}={{ proxmox_token_secret }}"
+          Content-Type: "application/x-www-form-urlencoded"
+        body: "command=/opt/dns-register.sh&command=cleanup"
+        validate_certs: "{{ proxmox_api_validate_certs }}"
+        status_code: [200, 404, 500]
+        timeout: 30
       register: dns_cleanup_result
       failed_when: false
       changed_when: false
+      when: cleanup_container_ip is defined
 
     - name: Debug DNS cleanup results
       debug:
         msg: |
-          DNS cleanup attempted for {{ service_name }} (VM {{ vm_id }})
-          - systemd stop rc: {{ dns_stop_result.rc | default('n/a') }}
-          - script cleanup rc: {{ dns_cleanup_result.rc | default('n/a') }}
-      when: dns_stop_result is defined or dns_cleanup_result is defined
+          DNS cleanup attempted for {{ service_name }} (VM {{ vm_id }}):
+          
+          {% if cleanup_container_ip is defined %}
+          ✅ Container IP found: {{ cleanup_container_ip }}
+          📋 DNS stop service result: {{ dns_stop_result.status | default('not attempted') }}
+          📋 DNS cleanup script result: {{ dns_cleanup_result.status | default('not attempted') }}
+          
+          {% if dns_stop_result.status == 200 and dns_cleanup_result.status == 200 %}
+          ✅ DNS cleanup completed successfully
+          {% else %}
+          ⚠️  DNS cleanup may have failed - check container logs if needed
+          {% endif %}
+          {% else %}
+          ⚠️  Could not determine container IP - DNS cleanup skipped
+          ℹ️  DNS records will expire naturally based on TTL settings
+          {% endif %}
+      when: dns_stop_result is defined or dns_cleanup_result is defined or cleanup_container_ip is not defined
 
     - name: Try to stop the container (idempotent)
       uri:
