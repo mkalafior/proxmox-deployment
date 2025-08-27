@@ -60,6 +60,11 @@ dns_server: "{{ dns_server | default('192.168.1.11') }}"
 dns_domain: "{{ dns_domain | default('proxmox.local') }}"
 service_hostname: "{{ service_hostname }}"
 
+# Container Tagging Configuration
+project_tag: "{{ lookup('env', 'PROJECT_TAG') | default('') }}"
+container_tags: "{{ ['proxmox-deploy', service_name] + ([project_tag] if project_tag != '' else []) }}"
+container_tags_string: "{{ container_tags | join(',') }}"
+
 # Database-specific values are injected by the generator/update script if not present
 # db_type: postgresql
 # db_name: {{ db_name | default(service_name) }}

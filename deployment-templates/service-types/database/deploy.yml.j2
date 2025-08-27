@@ -57,7 +57,7 @@
         curl -k -X POST \
           -H "Authorization: PVEAPIToken={{ proxmox_token_id }}={{ proxmox_token_secret }}" \
           -H "Content-Type: application/x-www-form-urlencoded" \
-          -d "vmid={{ vm_id }}&unprivileged=1&features=nesting%3D1&password={{ (lookup('password', '/tmp/vm_root_password chars=ascii_letters,digits length=16')) | urlencode }}&ssh-public-keys={{ ssh_public_key_content.content | b64decode | trim | urlencode }}&ostemplate={{ vm_os_template | urlencode }}&rootfs={{ (vm_storage ~ ':' ~ vm_disk_size) | urlencode }}&cores={{ vm_cores }}&memory={{ vm_memory }}&swap={{ vm_swap }}&net0={{ ('name=eth0,bridge=' ~ vm_network_bridge ~ ',firewall=1,ip=dhcp') | urlencode }}" \
+          -d "vmid={{ vm_id }}&unprivileged=1&features=nesting%3D1&password={{ (lookup('password', '/tmp/vm_root_password chars=ascii_letters,digits length=16')) | urlencode }}&ssh-public-keys={{ ssh_public_key_content.content | b64decode | trim | urlencode }}&ostemplate={{ vm_os_template | urlencode }}&rootfs={{ (vm_storage ~ ':' ~ vm_disk_size) | urlencode }}&cores={{ vm_cores }}&memory={{ vm_memory }}&swap={{ vm_swap }}&net0={{ ('name=eth0,bridge=' ~ vm_network_bridge ~ ',firewall=1,ip=dhcp') | urlencode }}&tags={{ container_tags_string | urlencode }}" \
           "https://{{ proxmox_host }}:8006/api2/json/nodes/{{ proxmox_node }}/lxc"
       register: proxmox_vm
       failed_when: false

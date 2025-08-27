@@ -378,14 +378,50 @@ README.md
 
 ## 🔧 Configuration
 
+### Automatic .env File Loading
+
+The `pxdcli` tool automatically discovers and loads `.env` files from your project directory! 🎉
+
+#### How it works:
+1. **Searches up the directory tree** (up to 3 levels) for `.env` files
+2. **Loads the first `.env` file found** starting from current directory
+3. **Also loads global configuration** from `~/.pxdcli/env.global`
+4. **Shows you what was loaded** for transparency
+
+#### Example usage:
+```bash
+# In your project directory ~/Web/my-project/
+echo "PROJECT_TAG=web-services" > .env
+echo "PROXMOX_HOST=192.168.1.100" >> .env
+echo "TOKEN_ID=your-token-id" >> .env
+echo "TOKEN_SECRET=your-token-secret" >> .env
+
+# Deploy from anywhere in your project
+cd ~/Web/my-project/frontend/
+pxdcli deploy my-service
+
+# Output:
+# 🔧 Loading environment from: /Users/you/Web/my-project/.env
+# ✅ Loaded environment from 1 file(s):
+#    - /Users/you/Web/my-project/.env
+# Container will be created with tags: proxmox-deploy,my-service,web-services
+```
+
+#### Search order:
+1. `./.env` (current directory)
+2. `../.env` (parent directory) 
+3. `../../.env` (grandparent directory)
+4. `~/.pxdcli/env.global` (global config)
+
 ### Global Configuration
-Edit `global-config/env.proxmox.global`:
+Edit `~/.pxdcli/env.global` or `global-config/env.proxmox.global`:
 ```bash
 export PROXMOX_HOST="192.168.1.99"
 export PROXMOX_USER="root@pam"
 export TOKEN_ID="root@pam!deploy-root"
 export TOKEN_SECRET="your-token-secret"
 export CLOUDFLARE_DOMAIN="yourdomain.com"  # Optional
+export PROJECT_TAG="my-project"  # Optional project tag
 ```
 
 ### Service-Specific Configuration

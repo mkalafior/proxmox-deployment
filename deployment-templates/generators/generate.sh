@@ -313,20 +313,54 @@ EOF
 create_deployment_scripts() {
     log_step "Creating deployment scripts..."
     
+    # Create shared environment loader
+    cat > "$DEPLOYMENT_DIR/load-env.sh" << 'EOF'
+#!/bin/bash
+# Shared environment loading functions
+
+# Auto-load .env files (search up directory tree)
+load_env_files() {
+    local search_dir="$(pwd)"
+    for i in {1..3}; do
+        if [[ -f "$search_dir/.env" ]]; then
+            echo "🔧 Loading environment from: $search_dir/.env"
+            set -a; source "$search_dir/.env"; set +a
+            break
+        fi
+        local parent_dir="$(dirname "$search_dir")"
+        if [[ "$parent_dir" == "$search_dir" ]]; then
+            break
+        fi
+        search_dir="$parent_dir"
+    done
+}
+
+# Load all environment sources
+load_all_env() {
+    # Load global configuration
+    if [[ -f "../../global-config/env.proxmox.global" ]]; then
+        source "../../global-config/env.proxmox.global"
+    fi
+    
+    # Load .env files automatically
+    load_env_files
+    
+    # Load service-specific configuration
+    if [[ -f "env.service" ]]; then
+        source "env.service"
+    fi
+}
+EOF
+    chmod +x "$DEPLOYMENT_DIR/load-env.sh"
+
     # Create deploy.sh script
     cat > "$DEPLOYMENT_DIR/deploy.sh" << 'EOF'
 #!/bin/bash
 set -euo pipefail
 
-# Load global configuration
-if [[ -f "../../global-config/env.proxmox.global" ]]; then
-    source "../../global-config/env.proxmox.global"
-fi
-
-# Load service-specific configuration
-if [[ -f "env.service" ]]; then
-    source "env.service"
-fi
+# Load environment configuration
+source "$(dirname "$0")/load-env.sh"
+load_all_env
 
 # Run Ansible playbook
 echo "🚀 Deploying service..."
@@ -363,15 +397,9 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-# Load global configuration
-if [[ -f "../../global-config/env.proxmox.global" ]]; then
-    source "../../global-config/env.proxmox.global"
-fi
-
-# Load service-specific configuration
-if [[ -f "env.service" ]]; then
-    source "env.service"
-fi
+# Load environment configuration
+source "$(dirname "$0")/load-env.sh"
+load_all_env
 
 # Set extra variables for Ansible
 EXTRA_VARS=""
@@ -400,15 +428,9 @@ EOF
 #!/bin/bash
 set -euo pipefail
 
-# Load global configuration
-if [[ -f "../../global-config/env.proxmox.global" ]]; then
-    source "../../global-config/env.proxmox.global"
-fi
-
-# Load service-specific configuration
-if [[ -f "env.service" ]]; then
-    source "env.service"
-fi
+# Load environment configuration
+source "$(dirname "$0")/load-env.sh"
+load_all_env
 
 # Run Ansible playbook
 echo "🧹 Cleaning up service..."

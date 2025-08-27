@@ -9,13 +9,60 @@ TEMPLATES_ROOT_DEFAULT="$HOME/.proxmox-deploy/templates"
 TEMPLATES_ROOT="${TEMPLATES_ROOT:-$TEMPLATES_ROOT_DEFAULT}"
 PROJECT_ROOT_OVERRIDE="${PROJECT_ROOT_OVERRIDE:-$(pwd)}"
 
-# Load global CLI environment (~/.pxdcli/env.global) if present
-PXDCLI_CONFIG_DIR="${PXDCLI_CONFIG_DIR:-$HOME/.pxdcli}"
-PXDCLI_GLOBAL_ENV="${PXDCLI_GLOBAL_ENV:-$PXDCLI_CONFIG_DIR/env.global}"
-if [[ -f "$PXDCLI_GLOBAL_ENV" ]]; then
-  # shellcheck disable=SC1090
-  . "$PXDCLI_GLOBAL_ENV"
-fi
+# Helper: Auto-discover and load .env files
+load_env_files() {
+  local loaded_files=()
+  
+  # 1. Load global CLI environment (~/.pxdcli/env.global) if present
+  PXDCLI_CONFIG_DIR="${PXDCLI_CONFIG_DIR:-$HOME/.pxdcli}"
+  PXDCLI_GLOBAL_ENV="${PXDCLI_GLOBAL_ENV:-$PXDCLI_CONFIG_DIR/env.global}"
+  if [[ -f "$PXDCLI_GLOBAL_ENV" ]]; then
+    # shellcheck disable=SC1090
+    . "$PXDCLI_GLOBAL_ENV"
+    loaded_files+=("$PXDCLI_GLOBAL_ENV")
+  fi
+  
+  # 2. Auto-discover .env files in current directory and parent directories
+  local current_dir="$(pwd)"
+  local search_dir="$current_dir"
+  
+  # Search up to 3 levels up for .env files
+  for i in {1..3}; do
+    if [[ -f "$search_dir/.env" ]]; then
+      echo "🔧 Loading environment from: $search_dir/.env"
+      # shellcheck disable=SC1090
+      set -a; . "$search_dir/.env"; set +a
+      loaded_files+=("$search_dir/.env")
+      break  # Stop at first .env file found
+    fi
+    
+    # Move up one directory
+    local parent_dir="$(dirname "$search_dir")"
+    if [[ "$parent_dir" == "$search_dir" ]]; then
+      break  # Reached root directory
+    fi
+    search_dir="$parent_dir"
+  done
+  
+  # 3. Also check for project-specific .env in the proxmox-deploy root
+  if [[ -f "$PROJECT_ROOT_OVERRIDE/.env" && "$PROJECT_ROOT_OVERRIDE/.env" != "$current_dir/.env" ]]; then
+    echo "🔧 Loading project environment from: $PROJECT_ROOT_OVERRIDE/.env"
+    # shellcheck disable=SC1090
+    set -a; . "$PROJECT_ROOT_OVERRIDE/.env"; set +a
+    loaded_files+=("$PROJECT_ROOT_OVERRIDE/.env")
+  fi
+  
+  # Show what was loaded
+  if [[ ${#loaded_files[@]} -gt 0 ]]; then
+    echo "✅ Loaded environment from ${#loaded_files[@]} file(s):"
+    printf "   - %s\n" "${loaded_files[@]}"
+  else
+    echo "ℹ️  No .env files found - using shell environment variables"
+  fi
+}
+
+# Load environment files automatically
+load_env_files
 
 ensure_templates() {
   if [[ ! -d "$TEMPLATES_ROOT/.git" ]]; then
