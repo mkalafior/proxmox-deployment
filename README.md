@@ -64,32 +64,66 @@ Install the global templates and CLI once, then use them from any project withou
 - j2cli (Jinja2 command-line tool) - automatically installed during setup
 - Ansible (for deployment) - automatically installed during setup
 
-### Linux
+### One-Command Installation (Recommended)
+
 ```bash
 git clone https://github.com/your-org/proxmox-deploy-playground
 cd proxmox-deploy-playground
-bash tools/install-global-templates.sh
-
-# Ensure CLI is on your PATH (add once)
-echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc
-source ~/.bashrc
-
-# Verify
-pxdcli help
+./tools/install.sh
 ```
 
-### macOS (zsh)
+This installs:
+- ✅ Global templates and CLI tool
+- ✅ Bash completion for enhanced productivity
+- ✅ Automatic PATH configuration
+
+### Custom Installation Options
+
 ```bash
-git clone https://github.com/your-org/proxmox-deploy-playground
-cd proxmox-deploy-playground
-bash tools/install-global-templates.sh
+# Install only templates and CLI (skip completion)
+./tools/install.sh --no-completion
 
-# Ensure CLI is on your PATH (add once)
-echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc
-source ~/.zshrc
+# Install only completion (skip templates)
+./tools/install.sh --no-templates
 
-# Verify
+# Force reinstall everything
+./tools/install.sh --force
+
+# Custom directories
+./tools/install.sh /opt/pxdcli /usr/local/bin
+
+# See all options
+./tools/install.sh --help
+```
+
+### Manual Verification
+
+```bash
+# Restart shell or source profile
+source ~/.bashrc  # Linux
+source ~/.zshrc   # macOS
+
+# Verify installation
 pxdcli help
+
+# Test completion (after shell restart)
+pxdcli de<TAB>    # Should complete to "deploy"
+```
+
+### Bash Completion Features
+
+The installer automatically sets up tab completion with these features:
+- **Command completion**: `pxdcli de<TAB>` → `deploy`
+- **Service name completion**: `pxdcli deploy <TAB>` → shows available services
+- **Option completion**: `pxdcli generate myapp --type <TAB>` → shows service types
+- **Context-aware completion**: `pxdcli generate myapp --type nodejs --runtime <TAB>` → shows `node bun`
+
+**Usage Examples:**
+```bash
+pxdcli de<TAB>                    # Completes to "deploy"
+pxdcli deploy <TAB>               # Shows available services
+pxdcli generate myapp --type <TAB> # Shows: nodejs python golang rust database static tor-proxy
+pxdcli update <TAB>               # Shows services and --force flag
 ```
 
 Notes
