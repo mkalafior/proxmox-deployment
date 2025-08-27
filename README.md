@@ -116,6 +116,21 @@ The installer automatically sets up tab completion with these features:
 - **Command completion**: `pxdcli de<TAB>` → `deploy`
 - **Service name completion**: `pxdcli deploy <TAB>` → shows available services
 - **Option completion**: `pxdcli generate myapp --type <TAB>` → shows service types
+
+### Troubleshooting Completion
+
+If tab completion stops working:
+
+```bash
+# Quick fix - reinstall completion
+./tools/install-completion.sh
+
+# Manual fix - source completion in current shell
+source tools/pxdcli-completion.bash
+
+# Check if completion is loaded
+complete -p pxdcli
+```
 - **Context-aware completion**: `pxdcli generate myapp --type nodejs --runtime <TAB>` → shows `node bun`
 
 **Usage Examples:**
