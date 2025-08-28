@@ -6,3 +6,4 @@ node_modules
 deployment/vm_ip.txt
 services/
 deployments/
+vault/

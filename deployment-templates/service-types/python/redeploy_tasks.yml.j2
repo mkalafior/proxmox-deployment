@@ -56,21 +56,7 @@
     - python_build_files.results | selectattr('stat.exists') | list | length > 0
     - skip_build | default(false) == false
 
-- name: Run Python tests if test directory exists
-  shell: "{{ app_dir }}/venv/bin/python -m pytest tests/ -v"
-  args:
-    chdir: "{{ app_dir }}"
-  become_user: "{{ app_user }}"
-  register: python_tests
-  failed_when: false
-  when:
-    - run_tests | default(false)
-    - skip_build | default(false) == false
-
-- name: Check test results
-  debug:
-    msg: "Tests {{ 'passed' if python_tests.rc == 0 else 'failed or skipped' }}"
-  when: python_tests is defined
+# Tests should be run locally before deployment, not on remote server
 
 - name: Save requirements.txt checksum
   shell: echo "{{ new_requirements_txt.stat.checksum }}" > {{ app_dir }}/.requirements.txt.checksum

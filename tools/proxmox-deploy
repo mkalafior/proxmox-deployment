@@ -441,7 +441,38 @@ case "$CMD" in
     echo "======================================"
     echo ""
     
+    # Fetch and display available nodes first
+    echo "🔍 Fetching available Proxmox nodes..."
+    if [[ -n "${PROXMOX_HOST:-}" && -n "${TOKEN_ID:-}" && -n "${TOKEN_SECRET:-}" ]]; then
+      available_nodes=$(curl -ks -H "Authorization: PVEAPIToken=${TOKEN_ID}=${TOKEN_SECRET}" \
+        "https://${PROXMOX_HOST}:8006/api2/json/nodes" 2>/dev/null | \
+        python3 -c "
+import json, sys
+try:
+    data = json.load(sys.stdin)
+    nodes = [node['node'] for node in data.get('data', [])]
+    print(' '.join(nodes))
+except:
+    pass
+" 2>/dev/null || echo "")
+      
+      if [[ -n "$available_nodes" ]]; then
+        echo "📋 Available nodes: $available_nodes"
+      else
+        echo "⚠️  Could not fetch nodes from API, you'll need to enter manually"
+      fi
+    else
+      echo "⚠️  No Proxmox credentials found, you'll need to enter node manually"
+    fi
+    echo ""
+    
     # Interactive prompts
+    read -p "Proxmox node name: " proxmox_node
+    while [[ -z "$proxmox_node" ]]; do
+      echo "Node name is required"
+      read -p "Proxmox node name: " proxmox_node
+    done
+    
     read -p "Application port (e.g., 3003): " app_port
     while [[ ! "$app_port" =~ ^[0-9]+$ ]]; do
       echo "Port must be a number"
@@ -465,7 +496,7 @@ case "$CMD" in
     fi
     
     # Build command
-    cmd=("pxdcli" "generate" "$service_name" "--type" "$service_type" "--port" "$app_port" "--hostname" "$service_hostname")
+    cmd=("pxdcli" "generate" "$service_name" "--type" "$service_type" "--port" "$app_port" "--node" "$proxmox_node" "--hostname" "$service_hostname")
     if [[ -n "$runtime_variant" ]]; then
       cmd+=("--runtime" "$runtime_variant")
     fi
@@ -544,7 +575,7 @@ case "$CMD" in
     fi
     echo "🔄 Redeploying all code-based services..."
     echo "========================================"
-    find "$root_dir" -mindepth 1 -maxdepth 1 -type d -exec basename {} \; | sort | while read -r svc; do
+    find "$root_dir" -mindepth 1 -maxdepth 1 -type d -exec basename {} \; | grep -v '^\.' | sort | while read -r svc; do
       [[ -z "$svc" ]] && continue
       
       # Check service type
@@ -576,7 +607,7 @@ case "$CMD" in
     fi
     echo "🚀 Deploying all services with vault security..."
     echo "================================================"
-    find "$root_dir" -mindepth 1 -maxdepth 1 -type d -exec basename {} \; | sort | while read -r svc; do
+    find "$root_dir" -mindepth 1 -maxdepth 1 -type d -exec basename {} \; | grep -v '^\.' | sort | while read -r svc; do
       [[ -z "$svc" ]] && continue
       echo ""
       echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
@@ -621,7 +652,7 @@ case "$CMD" in
     echo "📋 Available Services"
     echo "===================="
     echo ""
-    find "$root_dir" -mindepth 1 -maxdepth 1 -type d -exec basename {} \; | sort | while read -r svc; do
+    find "$root_dir" -mindepth 1 -maxdepth 1 -type d -exec basename {} \; | grep -v '^\.' | sort | while read -r svc; do
       [[ -z "$svc" ]] && continue
       echo "🔹 $svc"
       
@@ -683,7 +714,7 @@ case "$CMD" in
     root_dir="$PROJECT_ROOT_OVERRIDE/deployments"
     if [[ -z "$target_svc" ]]; then
       # all services
-      find "$root_dir" -mindepth 1 -maxdepth 1 -type d -exec basename {} \; | sort | while read -r svc; do
+      find "$root_dir" -mindepth 1 -maxdepth 1 -type d -exec basename {} \; | grep -v '^\.' | sort | while read -r svc; do
         [[ -z "$svc" ]] && continue
         svc_dir="$root_dir/$svc"
         echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
