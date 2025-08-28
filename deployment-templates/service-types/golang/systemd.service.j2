@@ -1,0 +1,20 @@
+[Unit]
+Description={{ service_name }} Go Application
+After=network.target
+
+[Service]
+Type=simple
+User={{ app_user }}
+Group={{ app_user }}
+WorkingDirectory={{ app_dir }}
+ExecStart={{ app_dir }}/{{ app_service_name }}
+Restart=always
+RestartSec=10
+Environment=CGO_ENABLED=0
+{% if app_port is defined %}
+Environment=PORT={{ app_port }}
+{% endif %}
+Environment=HOST=0.0.0.0
+
+[Install]
+WantedBy=multi-user.target

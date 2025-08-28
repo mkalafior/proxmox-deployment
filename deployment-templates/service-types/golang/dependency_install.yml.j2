@@ -1,0 +1,58 @@
+# Go Dependency Installation and Build
+- name: Initialize Go modules
+  shell: |
+    export PATH=$PATH:/usr/local/go/bin
+    go mod tidy
+  args:
+    chdir: "{{ app_dir }}"
+  become_user: "{{ app_user }}"
+  environment:
+    GOOS: linux
+    GOARCH: amd64
+
+- name: Download Go dependencies
+  shell: |
+    export PATH=$PATH:/usr/local/go/bin
+    go mod download
+  args:
+    chdir: "{{ app_dir }}"
+  become_user: "{{ app_user }}"
+  environment:
+    GOOS: linux
+    GOARCH: amd64
+
+- name: Build Go application
+  shell: |
+    export PATH=$PATH:/usr/local/go/bin
+    go build -o {{ app_service_name }} {{ app_main_file | default('.') }}
+  args:
+    chdir: "{{ app_dir }}"
+  become_user: "{{ app_user }}"
+  environment:
+    GOOS: linux
+    GOARCH: amd64
+    CGO_ENABLED: "0"
+  register: go_build_result
+
+- name: Check build results
+  fail:
+    msg: "Go build failed for {{ service_name }}: {{ go_build_result.stderr }}"
+  when: go_build_result.failed | default(false)
+
+- name: Verify binary was created
+  stat:
+    path: "{{ app_dir }}/{{ app_service_name }}"
+  register: go_binary
+
+- name: Ensure binary is executable
+  file:
+    path: "{{ app_dir }}/{{ app_service_name }}"
+    mode: '0755'
+    owner: "{{ app_user }}"
+    group: "{{ app_user }}"
+  when: go_binary.stat.exists
+
+- name: Display build success
+  debug:
+    msg: "Go binary built successfully: {{ app_dir }}/{{ app_service_name }}"
+  when: go_binary.stat.exists

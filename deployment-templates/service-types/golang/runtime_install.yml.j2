@@ -1,0 +1,19 @@
+# Go Runtime Installation
+- name: Install Go runtime
+  shell: |
+    cd /tmp
+    wget https://go.dev/dl/go1.21.0.linux-amd64.tar.gz
+    tar -C /usr/local -xzf go1.21.0.linux-amd64.tar.gz
+    ln -sf /usr/local/go/bin/go /usr/local/bin/go
+  args:
+    creates: /usr/local/bin/go
+  become: true
+
+- name: Verify Go installation
+  shell: /usr/local/go/bin/go version
+  register: go_version_check
+  changed_when: false
+
+- name: Display Go version
+  debug:
+    msg: "Installed Go version: {{ go_version_check.stdout }}"
