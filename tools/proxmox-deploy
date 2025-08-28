@@ -325,7 +325,7 @@ case "$CMD" in
   update)
     ensure_templates
     TEMPLATES_ROOT="$TEMPLATES_ROOT" PROJECT_ROOT_OVERRIDE="$PROJECT_ROOT_OVERRIDE" \
-      bash "$TEMPLATES_ROOT/deployment-templates/update-deployments.sh" "$@"
+      bash "$TEMPLATES_ROOT/deployment-templates/generators/generate.sh" "$@"
     ;;
   deploy)
     svc="${1:-}"

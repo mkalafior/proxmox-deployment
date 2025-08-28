@@ -5,9 +5,9 @@
 
 # Configuration
 SERVICE_NAME="{{ service_hostname | default(app_name) }}"
-DNS_SERVER="192.168.1.11"  # CT101 IP
+DNS_SERVER="{{ dns_server }}"
 KEY_FILE="/etc/bind-key.conf"
-DOMAIN="proxmox.local"
+DOMAIN="{{ dns_domain }}"
 LOG_FILE="/var/log/dns-register.log"
 
 # Logging function

@@ -19,11 +19,15 @@ proxmox-deploy-playground/
 │   ├── service01/              # Bun deployment
 │   └── service02/              # Bun deployment
 ├── deployment-templates/       # Shared templates (DRY principle)
-│   ├── base/                   # Base Ansible templates
-│   ├── service-types/          # Language-specific configs & starter templates
-│   │   ├── nodejs/service-starter/  # Node.js starter templates
-│   │   ├── python/service-starter/  # Python starter templates
-│   │   └── golang/service-starter/  # Go starter templates
+│   ├── base/                   # Base Ansible templates with shared container management
+│   │   └── templates/          # Shared task files (container lifecycle, IP discovery)
+│   ├── service-types/          # Service-specific deployment templates
+│   │   ├── nodejs/             # Node.js deployment templates & starter code
+│   │   ├── python/             # Python deployment templates & starter code
+│   │   ├── golang/             # Go deployment templates & starter code
+│   │   ├── database/           # Database deployment templates (PostgreSQL, MySQL, etc.)
+│   │   ├── static/             # Static site deployment templates
+│   │   └── tor-proxy/          # Tor proxy deployment templates
 │   └── generators/             # Template-based generation scripts
 ├── global-config/              # Global configuration
 │   ├── env.proxmox.global      # Global Proxmox settings
@@ -41,19 +45,21 @@ proxmox-deploy-playground/
 - **Static Sites** - Nginx-served websites and SPAs
 
 ### Infrastructure Services
-- **PostgreSQL** - ACID database with user setup
-- **MySQL** - Traditional relational database
-- **Redis** - In-memory cache/store
-- **MongoDB** - Document database
+- **PostgreSQL** - ACID database with automated user/database setup and remote access configuration
+- **MySQL** - Traditional relational database with user management and network configuration
+- **Redis** - In-memory cache/store with remote access enabled
+- **MongoDB** - Document database with network binding configuration
 - **Tor Proxy** - Privacy-focused proxy services
 
 ### Template-Based Service Generation
 All service types use Jinja2 templates for consistent, maintainable code generation:
-- **Runtime-specific configurations** (Node.js vs Bun, Python versions)
+- **Runtime-specific configurations** (Node.js vs Bun, Python versions, database engines)
 - **Proper error handling** and HTTP status codes
 - **Health check endpoints** and service metadata
 - **Environment-based configuration** (PORT, HOST variables)
 - **CORS headers** and security best practices
+- **Robust container lifecycle management** with task monitoring and exponential backoff
+- **Automated database setup** with user creation, remote access, and security configuration
 
 ## 🔧 Installation (Linux/macOS)
 
@@ -208,9 +214,18 @@ pxdcli generate bun-service --type nodejs --runtime bun --port 3002
 # Python service with FastAPI template
 pxdcli generate python-api --type python --port 8000 --node pve2
 
-# Full manual control with database setup
+# Database with automatic configuration
 pxdcli generate postgres-db --type database --runtime postgresql \
-  --node pve1 --vm-id 204 --port 5432 --db-name myapp --db-user myuser --db-pass secret123
+  --node pve1 --vm-id 204 --port 5432
+
+# MySQL database
+pxdcli generate mysql-db --type database --runtime mysql --port 3306
+
+# Redis cache
+pxdcli generate redis-cache --type database --runtime redis --port 6379
+
+# MongoDB document store
+pxdcli generate mongo-db --type database --runtime mongodb --port 27017
 ```
 
 ### 2. Deploy Services
@@ -482,6 +497,80 @@ pxdcli update
 pxdcli deploy
 ```
 
+## 🗄️ Database Deployments
+
+The system provides robust, production-ready database deployments with automated configuration:
+
+### Supported Database Types
+- **PostgreSQL** - Full ACID compliance with user management
+- **MySQL** - Traditional relational database with remote access
+- **Redis** - High-performance in-memory store
+- **MongoDB** - Document database with network configuration
+
+### Database Features
+- ✅ **Automated Installation** - Database engine and dependencies
+- ✅ **User & Database Creation** - Service-specific credentials
+- ✅ **Remote Access Configuration** - Network binding and authentication
+- ✅ **Security Setup** - Firewall rules and access controls
+- ✅ **Service Integration** - DNS-based service discovery
+- ✅ **Container Lifecycle Management** - Robust creation with task monitoring
+
+### Database Generation Examples
+```bash
+# PostgreSQL with automatic setup
+pxdcli generate postgres-db --type database --runtime postgresql --port 5432
+
+# MySQL database
+pxdcli generate mysql-db --type database --runtime mysql --port 3306
+
+# Redis cache
+pxdcli generate redis-cache --type database --runtime redis --port 6379
+
+# MongoDB document store
+pxdcli generate mongo-db --type database --runtime mongodb --port 27017
+```
+
+### Generated Database Configuration
+Each database deployment automatically creates:
+- **Database**: Named after the service (e.g., `postgres_db` for service `postgres-db`)
+- **User**: Service-specific user with full database privileges
+- **Password**: Securely generated 16-character password
+- **Remote Access**: Configured for network connections from other services
+- **Firewall**: Appropriate port access rules
+
+### Database Connection Examples
+```python
+# Python connecting to PostgreSQL
+import psycopg2
+conn = psycopg2.connect(
+    host="postgres-db.proxmox.local",
+    port=5432,
+    database="postgres_db",
+    user="postgres_db_user",
+    password="generated_password"
+)
+```
+
+```javascript
+// Node.js connecting to MySQL
+const mysql = require('mysql2/promise');
+const connection = await mysql.createConnection({
+  host: 'mysql-db.proxmox.local',
+  port: 3306,
+  user: 'mysql_db_user',
+  password: 'generated_password',
+  database: 'mysql_db'
+});
+```
+
+```go
+// Go connecting to Redis
+import "github.com/go-redis/redis/v8"
+rdb := redis.NewClient(&redis.Options{
+    Addr: "redis-cache.proxmox.local:6379",
+})
+```
+
 ## 🌐 Service Communication
 
 Services communicate via DNS names:
@@ -536,6 +625,33 @@ pxdcli deploy          # Deploy all services
 pxdcli logs python-api
 pxdcli restart go-api
 ```
+
+## 🔧 Container Lifecycle Management
+
+The system provides robust container management with enterprise-grade reliability:
+
+### Container Creation Features
+- ✅ **Task Monitoring** - Polls Proxmox API for task completion status
+- ✅ **Exponential Backoff** - Intelligent retry mechanism with 20 attempts
+- ✅ **Status Validation** - Verifies container creation success before proceeding
+- ✅ **IP Discovery** - Automatic container IP detection with retry logic
+- ✅ **SSH Readiness** - Waits for SSH connectivity before configuration
+- ✅ **Shared Logic** - DRY principle with centralized container management tasks
+
+### Container Management Process
+1. **Creation Request** - Submits container creation via Proxmox API
+2. **Task Monitoring** - Polls task status every 5 seconds (up to 20 retries)
+3. **Status Validation** - Ensures task completed successfully (`exitstatus: 'OK'`)
+4. **Container Startup** - Starts the container if creation succeeded
+5. **IP Discovery** - Retrieves container IP address via qemu-guest-agent
+6. **SSH Verification** - Confirms SSH connectivity before proceeding
+7. **Service Configuration** - Proceeds with service-specific setup
+
+### Error Handling
+- **Creation Failures** - Detailed error reporting with Proxmox task information
+- **Timeout Protection** - Prevents indefinite waiting on stuck operations
+- **Graceful Degradation** - Clear error messages for troubleshooting
+- **Retry Logic** - Automatic retries for transient network issues
 
 ## 🔐 Security & Networking
 
@@ -612,9 +728,8 @@ pxdcli generate api-gateway --type nodejs --runtime bun --port 3000 --node pve
 pxdcli generate user-service --type nodejs --runtime node --port 3001 --node pve
 # Generates: Node.js HTTP server with URL parsing, JSON responses
 
-pxdcli generate main-db --type database --runtime postgresql \
-  --port 5432 --db-name ecommerce --node pve
-# Generates: PostgreSQL with user setup and database initialization
+pxdcli generate main-db --type database --runtime postgresql --port 5432 --node pve
+# Generates: PostgreSQL with automated user/database setup, remote access, and security configuration
 
 pxdcli generate web-frontend --type static --port 80 --node pve
 # Generates: Nginx-served static site with proper configuration
@@ -708,22 +823,34 @@ pxdcli update --file deploy.yml.j2
 ### DRY (Don't Repeat Yourself)
 - Single source of truth for deployment logic
 - Shared templates and configurations
+- Centralized container lifecycle management
+- Unified task monitoring and IP discovery
 - Centralized updates affect all services
 
 ### KISS (Keep It Simple, Stupid)
 - Simple shell scripts for common operations
 - Clear directory structure
 - Minimal dependencies (Ansible + Bash)
+- Service-specific templates when needed
+
+### Enterprise-Grade Reliability
+- Robust container creation with task monitoring
+- Exponential backoff for transient failures
+- Comprehensive error handling and reporting
+- Production-ready database configurations
+- Automated security and network setup
 
 ### Multi-Language Support
 - Use the right tool for each job
 - Team specialization
 - Technology freedom
+- Database engine flexibility
 
 ### Service Isolation
 - Independent scaling and configuration
 - Isolated failures
 - Resource optimization per service
+- Container-level security boundaries
 
 ## 📚 Advanced Topics
 
@@ -784,11 +911,14 @@ service_dependencies:
 
 ---
 
-## 🎉 You now have a production-ready, template-based, multi-language deployment system!
+## 🎉 You now have an enterprise-grade, template-based, multi-language deployment system!
 
 From simple single-service deployments to complex polyglot microservices architectures - all with:
 - **Template-based service generation** using Jinja2 for consistent, high-quality code
-- **Runtime-specific optimizations** (Node.js vs Bun, Python versions, etc.)
+- **Runtime-specific optimizations** (Node.js vs Bun, Python versions, database engines)
 - **Built-in best practices** (health checks, error handling, CORS, environment configuration)
-- **DRY and KISS principles** with centralized templates and simple management
-- **Production-ready code** generated from the start with proper HTTP handling and logging
+- **Enterprise-grade reliability** with robust container lifecycle management and task monitoring
+- **Production-ready databases** with automated setup, user management, and security configuration
+- **DRY and KISS principles** with centralized templates and shared container management
+- **Exponential backoff and retry logic** for handling transient infrastructure issues
+- **Comprehensive error handling** with detailed reporting and graceful degradation

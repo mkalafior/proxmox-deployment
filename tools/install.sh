@@ -132,6 +132,7 @@ if [[ "$INSTALL_TEMPLATES" == "true" ]]; then
     else
         print_info "Templates already installed at $TARGET_DIR"
         print_info "Updating templates..."
+        git -C "$TARGET_DIR" stash
         git -C "$TARGET_DIR" pull --ff-only || {
             print_warning "Failed to update templates (possibly due to local changes)"
             print_info "Use --force to reinstall from scratch"

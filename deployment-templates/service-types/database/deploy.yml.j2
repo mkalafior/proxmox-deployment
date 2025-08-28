@@ -456,6 +456,19 @@
         var: custom_script_result.stdout_lines
       when: hostvars['localhost']['local_custom_script'].stat.exists
 
+    - name: Configure container DNS to use our DNS server
+      copy:
+        dest: /etc/resolv.conf
+        content: |
+          # --- BEGIN PVE ---
+          search {{ dns_domain }}
+          nameserver {{ dns_server }}
+          nameserver 8.8.8.8
+          # --- END PVE ---
+        mode: '0644'
+        owner: root
+        group: root
+
     - name: Copy DNS authentication key
       template:
         src: bind-key.conf.j2
