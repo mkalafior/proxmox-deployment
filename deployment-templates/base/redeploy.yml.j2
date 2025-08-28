@@ -309,10 +309,10 @@
           - Backup Location: {{ backup_dir.path }}
           - Health Check: {{ health_check_result.msg | default('Not performed') }}
 
-    - name: Cleanup old backups (keep last 3)
+    - name: Cleanup old backups (keep last 1)
       shell: |
         cd {{ app_dir | dirname }}
-        ls -dt {{ service_name }}-backup-* 2>/dev/null | tail -n +4 | xargs rm -rf
+        ls -dt {{ service_name }}-backup-* 2>/dev/null | tail -n +2 | xargs rm -rf
       failed_when: false
 
   handlers:
