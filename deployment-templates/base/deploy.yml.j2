@@ -8,7 +8,22 @@
     - ../global-config.yml
     - service-config.yml
   
+  vars:
+    # Secure temporary directory (replaces /tmp usage)
+    secure_temp_dir: "{{ playbook_dir }}/../.secure_temp/{{ service_name }}_{{ ansible_date_time.epoch }}_{{ ansible_pid | default(9999) }}"
+  
   tasks:
+    - name: Create secure temporary directory
+      file:
+        path: "{{ secure_temp_dir }}"
+        state: directory
+        mode: '0700'
+      become: false
+
+    - name: Set secure temp directory as fact for other plays
+      set_fact:
+        shared_secure_temp_dir: "{{ secure_temp_dir }}"
+
     - name: Validate environment variables
       assert:
         that:
@@ -112,7 +127,7 @@
     - name: Copy custom deployment script to temporary location
       copy:
         src: "{{ playbook_dir }}/scripts/custom_script.sh"
-        dest: "/tmp/{{ service_name }}-custom_script.sh"
+        dest: "{{ secure_temp_dir }}/custom_script.sh"
         mode: '0755'
       when: local_custom_script.stat.exists
       become: false
@@ -140,7 +155,7 @@
         fi
         
         # Create tar with dynamic exclusions
-        eval "tar $EXCLUDE_OPTS -czf /tmp/{{ service_name }}-app.tar.gz ."
+        eval "tar $EXCLUDE_OPTS -czf {{ secure_temp_dir }}/app.tar.gz ."
       become: false
       when: container_ip is defined
 
@@ -153,12 +168,20 @@
     - ../global-config.yml
     - service-config.yml
   vars:
+    # Use shared secure temp directory from first play
+    secure_temp_dir: "{{ hostvars['localhost']['shared_secure_temp_dir'] }}"
     ansible_ssh_common_args: '-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null'
   
   tasks:
     - name: Wait for system to be ready
       wait_for_connection:
-        timeout: 300
+        timeout: 30
+
+    - name: Create secure temporary directory on remote
+      file:
+        path: "{{ secure_temp_dir }}"
+        state: directory
+        mode: '0700'
 
     - name: Test internet connectivity
       uri:
@@ -228,13 +251,13 @@
       block:
         - name: Copy tar archive to container
           copy:
-            src: "/tmp/{{ service_name }}-app.tar.gz"
-            dest: "/tmp/{{ service_name }}-app.tar.gz"
+            src: "{{ secure_temp_dir }}/app.tar.gz"
+            dest: "{{ secure_temp_dir }}/app.tar.gz"
             mode: '0644'
 
         - name: Extract application files
           unarchive:
-            src: "/tmp/{{ service_name }}-app.tar.gz"
+            src: "{{ secure_temp_dir }}/app.tar.gz"
             dest: "{{ app_dir }}"
             remote_src: yes
             owner: "{{ app_user }}"
@@ -242,7 +265,7 @@
 
         - name: Clean up tar files on remote container
           file:
-            path: "/tmp/{{ service_name }}-app.tar.gz"
+            path: "{{ secure_temp_dir }}/app.tar.gz"
             state: absent
 
       when: service_type != 'database'
@@ -267,7 +290,7 @@
 
     - name: Upload custom deployment script to container
       copy:
-        src: "/tmp/{{ service_name }}-custom_script.sh"
+        src: "{{ secure_temp_dir }}/custom_script.sh"
         dest: "/opt/custom_script.sh"
         mode: '0755'
         owner: root
@@ -432,19 +455,19 @@
         - name: Generate new tunnel configuration
           template:
             src: cloudflare-tunnel-config.yml.j2
-            dest: /tmp/new_tunnel_config.yml
+            dest: "{{ secure_temp_dir }}/tunnel_config.yml"
           run_once: true
           
         - name: Upload new tunnel configuration
           copy:
-            src: /tmp/new_tunnel_config.yml
+            src: "{{ secure_temp_dir }}/tunnel_config.yml"
             dest: /etc/cloudflared/config.yml
           delegate_to: "{{ proxmox_host }}"
           run_once: true
           
         - name: Clean up temporary config file
           file:
-            path: /tmp/new_tunnel_config.yml
+            path: "{{ secure_temp_dir }}/tunnel_config.yml"
             state: absent
           run_once: true
           
@@ -543,16 +566,33 @@
     - ../global-config.yml
     - service-config.yml
   
+  vars:
+    # Use shared secure temp directory from first play
+    secure_temp_dir: "{{ hostvars['localhost']['shared_secure_temp_dir'] }}"
+  
   tasks:
+    - name: Create secure temporary directory
+      file:
+        path: "{{ secure_temp_dir }}"
+        state: directory
+        mode: '0700'
+      become: false
+
+    - name: Clean up secure temporary directory
+      file:
+        path: "{{ secure_temp_dir }}"
+        state: absent
+      become: false
+      when: secure_temp_dir is defined
     - name: Clean up local tar file after deployment
       file:
-        path: "/tmp/{{ service_name }}-app.tar.gz"
+        path: "{{ secure_temp_dir }}/app.tar.gz"
         state: absent
       become: false
 
     - name: Clean up temporary custom script
       file:
-        path: "/tmp/{{ service_name }}-custom_script.sh"
+        path: "{{ secure_temp_dir }}/custom_script.sh"
         state: absent
       when: hostvars['localhost']['local_custom_script'].stat.exists
       become: false

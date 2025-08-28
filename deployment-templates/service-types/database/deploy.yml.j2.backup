@@ -10,8 +10,6 @@
     - ../../vault/vault.yml
   
   vars:
-    # Secure temporary directory (replaces /tmp usage)
-    secure_temp_dir: "{{ playbook_dir }}/../.secure_temp/{{ service_name }}_{{ ansible_date_time.epoch }}_{{ ansible_pid | default(9999) }}"
     health_check_path: "/"
   tasks:
     - name: Validate environment variables
@@ -114,17 +112,10 @@
       register: local_custom_script
       become: false
 
-    - name: Create secure temporary directory
-      file:
-        path: "{{ secure_temp_dir }}"
-        state: directory
-        mode: '0700'
-      become: false
-
     - name: Copy custom deployment script to temporary location
       copy:
         src: "{{ playbook_dir }}/scripts/custom_script.sh"
-        dest: "{{ secure_temp_dir }}/custom_script.sh"
+        dest: "/tmp/{{ service_name }}-custom_script.sh"
         mode: '0755'
       when: local_custom_script.stat.exists
       become: false
@@ -152,7 +143,7 @@
         fi
         
         # Create tar with dynamic exclusions
-        eval "tar $EXCLUDE_OPTS -czf {{ secure_temp_dir }}/app.tar.gz ."
+        eval "tar $EXCLUDE_OPTS -czf /tmp/{{ service_name }}-app.tar.gz ."
       become: false
       when: container_ip is defined
 
@@ -164,8 +155,6 @@
     - service-config.yml
     - ../../vault/vault.yml
   vars:
-    # Secure temporary directory (replaces /tmp usage)
-    secure_temp_dir: "{{ playbook_dir }}/../.secure_temp/{{ service_name }}_{{ ansible_date_time.epoch }}_{{ ansible_pid | default(9999) }}"
     ansible_ssh_common_args: '-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null'
     runtime_variant: "{{ database_runtime | default('postgresql') }}"
     allowed_ports: "{{ default_allowed_ports + [app_port | string] + (additional_ports | default([])) }}"
@@ -438,7 +427,7 @@
 
     - name: Upload custom deployment script to container
       copy:
-        src: "{{ secure_temp_dir }}/custom_script.sh"
+        src: "/tmp/{{ service_name }}-custom_script.sh"
         dest: "/opt/custom_script.sh"
         mode: '0755'
         owner: root
@@ -573,19 +562,19 @@
         - name: Generate new tunnel configuration
           template:
             src: cloudflare-tunnel-config.yml.j2
-            dest: "{{ secure_temp_dir }}/tunnel_config.yml"
+            dest: /tmp/new_tunnel_config.yml
           run_once: true
           
         - name: Upload new tunnel configuration
           copy:
-            src: "{{ secure_temp_dir }}/tunnel_config.yml"
+            src: /tmp/new_tunnel_config.yml
             dest: /etc/cloudflared/config.yml
           delegate_to: "{{ proxmox_host }}"
           run_once: true
           
         - name: Clean up temporary config file
           file:
-            path: "{{ secure_temp_dir }}/tunnel_config.yml"
+            path: /tmp/new_tunnel_config.yml
             state: absent
           run_once: true
           
@@ -675,33 +664,17 @@
     - ../global-config.yml
     - service-config.yml
     - ../../vault/vault.yml
-  vars:
-    # Secure temporary directory (replaces /tmp usage)
-    secure_temp_dir: "{{ playbook_dir }}/../.secure_temp/{{ service_name }}_{{ ansible_date_time.epoch }}_{{ ansible_pid | default(9999) }}"
   
   tasks:
-    - name: Create secure temporary directory
-      file:
-        path: "{{ secure_temp_dir }}"
-        state: directory
-        mode: '0700'
-      become: false
-
-    - name: Clean up secure temporary directory
-      file:
-        path: "{{ secure_temp_dir }}"
-        state: absent
-      become: false
-      when: secure_temp_dir is defined
     - name: Clean up local tar file after deployment
       file:
-        path: "{{ secure_temp_dir }}/app.tar.gz"
+        path: "/tmp/{{ service_name }}-app.tar.gz"
         state: absent
       become: false
 
     - name: Clean up temporary custom script
       file:
-        path: "{{ secure_temp_dir }}/custom_script.sh"
+        path: "/tmp/{{ service_name }}-custom_script.sh"
         state: absent
       when: hostvars['localhost']['local_custom_script'].stat.exists
       become: false

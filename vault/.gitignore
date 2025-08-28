@@ -1,0 +1,6 @@
+# Exclude vault password file (contains decryption key)
+.vault_password
+
+# Include encrypted vault files (safe to commit)
+!*.vault
+!vault.yml

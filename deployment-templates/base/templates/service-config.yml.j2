@@ -17,6 +17,7 @@ vm_storage: {{ vm_storage }}
 vm_network_bridge: {{ vm_network_bridge }}
 vm_swap: {{ vm_swap }}
 vm_unprivileged: {{ vm_unprivileged }}
+container_type: lxc
 
 # Application Configuration
 app_name: {{ app_name }}
@@ -45,7 +46,8 @@ proxmox_node: {{ proxmox_node }}
 # Database configuration
 db_name: {{ service_name | replace('-', '_') }}
 db_user: {{ service_name | replace('-', '_') }}_user
-db_password: "{{ '{{' }} lookup('password', '/tmp/db_password chars=ascii_letters,digits length=16') {{ '}}' }}"
+# Secure password from Ansible Vault (encrypted, safe to commit)
+db_password: "{{ '{{' }} vault_passwords['{{ service_name }}'] {{ '}}' }}"
 {% endif %}
 
 # Additional ports to open in firewall

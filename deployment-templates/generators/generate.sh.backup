@@ -324,8 +324,7 @@ create_deployment_config() {
         log_info "Generating service-config.yml from template..."
         
         # Create temporary variables file for Ansible
-        local temp_vars_file="$TARGET_PROJECT_ROOT/.secure_temp/service-vars-$$.yml"
-        mkdir -p "$(dirname "$temp_vars_file")" && chmod 700 "$(dirname "$temp_vars_file")"
+        local temp_vars_file="/tmp/service-vars-$$.yml"
         cat > "$temp_vars_file" << EOF
 ---
 service_name: "$SERVICE_NAME"
@@ -562,13 +561,9 @@ set -euo pipefail
 source "$(dirname "$0")/load-env.sh"
 load_all_env
 
-# Run Ansible playbook from project root (where ansible.cfg is located)
+# Run Ansible playbook
 echo "🚀 Deploying service..."
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-SERVICE_NAME="$(basename "$SCRIPT_DIR")"
-PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
-cd "$PROJECT_ROOT"
-ansible-playbook -i localhost, "deployments/${SERVICE_NAME}/deploy.yml"
+ansible-playbook -i localhost, deploy.yml
 EOF
     chmod +x "$DEPLOYMENT_DIR/deploy.sh"
     log_info "Created deploy.sh"

@@ -1,5 +1,5 @@
 ---
-# Database deployment playbook for {{ service_name }}
+# Generic container deployment playbook for {{ service_name }}
 - name: Deploy {{ service_name }} to Proxmox VE
   hosts: localhost
   connection: local
@@ -7,12 +7,7 @@
   vars_files:
     - ../global-config.yml
     - service-config.yml
-    - ../../vault/vault.yml
   
-  vars:
-    # Secure temporary directory (replaces /tmp usage)
-    secure_temp_dir: "{{ playbook_dir }}/../.secure_temp/{{ service_name }}_{{ ansible_date_time.epoch }}_{{ ansible_pid | default(9999) }}"
-    health_check_path: "/"
   tasks:
     - name: Validate environment variables
       assert:
@@ -114,17 +109,10 @@
       register: local_custom_script
       become: false
 
-    - name: Create secure temporary directory
-      file:
-        path: "{{ secure_temp_dir }}"
-        state: directory
-        mode: '0700'
-      become: false
-
     - name: Copy custom deployment script to temporary location
       copy:
         src: "{{ playbook_dir }}/scripts/custom_script.sh"
-        dest: "{{ secure_temp_dir }}/custom_script.sh"
+        dest: "/tmp/{{ service_name }}-custom_script.sh"
         mode: '0755'
       when: local_custom_script.stat.exists
       become: false
@@ -152,29 +140,22 @@
         fi
         
         # Create tar with dynamic exclusions
-        eval "tar $EXCLUDE_OPTS -czf {{ secure_temp_dir }}/app.tar.gz ."
+        eval "tar $EXCLUDE_OPTS -czf /tmp/{{ service_name }}-app.tar.gz ."
       become: false
       when: container_ip is defined
 
-- name: Configure container and deploy {{ service_name }} database
+
+
+- name: Configure container and deploy {{ service_name }} application
   hosts: proxmox_containers
   become: true
   vars_files:
     - ../global-config.yml
     - service-config.yml
-    - ../../vault/vault.yml
   vars:
-    # Secure temporary directory (replaces /tmp usage)
-    secure_temp_dir: "{{ playbook_dir }}/../.secure_temp/{{ service_name }}_{{ ansible_date_time.epoch }}_{{ ansible_pid | default(9999) }}"
     ansible_ssh_common_args: '-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null'
-    runtime_variant: "{{ database_runtime | default('postgresql') }}"
-    allowed_ports: "{{ default_allowed_ports + [app_port | string] + (additional_ports | default([])) }}"
   
   tasks:
-    - name: Normalize db_type from runtime_variant if undefined
-      set_fact:
-        db_type: "{{ db_type | default(runtime_variant) | default('postgresql') }}"
-
     - name: Wait for system to be ready
       wait_for_connection:
         timeout: 300
@@ -216,209 +197,16 @@
       ufw:
         rule: allow
         port: "{{ item }}"
-      loop: "{{ allowed_ports }}"
+      loop: "{{ default_allowed_ports + [app_port | string] + (additional_ports | default([])) }}"
 
     - name: Enable firewall
       ufw:
         state: enabled
 
-    # DATABASE-SPECIFIC INSTALLATION
-    - name: Install PostgreSQL
-      apt:
-        name:
-          - postgresql
-          - postgresql-contrib
-          - python3-psycopg2
-        state: present
-      when:
-        - not internet_test.failed
-        - db_type == 'postgresql'
-
-    - name: Install MySQL
-      apt:
-        name:
-          - mysql-server
-          - python3-pymysql
-        state: present
-      when:
-        - not internet_test.failed
-        - db_type == 'mysql'
-
-    - name: Install Redis
-      apt:
-        name: redis-server
-        state: present
-      when:
-        - not internet_test.failed
-        - db_type == 'redis'
-
-    - name: Install MongoDB
-      shell: |
-        wget -qO - https://www.mongodb.org/static/pgp/server-6.0.asc | apt-key add -
-        echo "deb [ arch=amd64,arm64 ] https://repo.mongodb.org/apt/ubuntu jammy/mongodb-org/6.0 multiverse" | tee /etc/apt/sources.list.d/mongodb-org-6.0.list
-        apt-get update
-        apt-get install -y mongodb-org
-      when:
-        - not internet_test.failed
-        - db_type == 'mongodb'
-
-    # DATABASE-SPECIFIC CONFIGURATION
-    - name: Ensure PostgreSQL is running
-      systemd:
-        name: postgresql
-        state: started
-        enabled: yes
-      when:
-        - not internet_test.failed
-        - db_type == 'postgresql'
-
-    - name: Discover PostgreSQL config directory
-      shell: |
-        dirname $(readlink -f $(find /etc/postgresql -type f -name postgresql.conf | head -n1))
-      register: pg_conf_dir
-      changed_when: false
-      when: db_type == 'postgresql'
-
-    - name: Configure listen_addresses in postgresql.conf
-      lineinfile:
-        path: "{{ pg_conf_dir.stdout }}/postgresql.conf"
-        regexp: "^#?listen_addresses\\s*=.*"
-        line: "listen_addresses = '*'"
-        backup: yes
-      when: db_type == 'postgresql'
-
-    - name: Configure PostgreSQL port in postgresql.conf
-      lineinfile:
-        path: "{{ pg_conf_dir.stdout }}/postgresql.conf"
-        regexp: "^#?port\\s*=.*"
-        line: "port = {{ app_port }}"
-        backup: yes
-      when: db_type == 'postgresql'
-
-    - name: Ensure pg_hba allows remote connections
-      blockinfile:
-        path: "{{ pg_conf_dir.stdout }}/pg_hba.conf"
-        marker: "# {mark} ANSIBLE MANAGED BLOCK - remote access"
-        block: |
-          host    all             all             0.0.0.0/0               md5
-          host    all             all             ::/0                    md5
-      when: db_type == 'postgresql'
-
-    - name: Restart PostgreSQL to apply config
-      systemd:
-        name: postgresql
-        state: restarted
-      when: db_type == 'postgresql'
-
-    - name: Wait for PostgreSQL to listen on port
-      wait_for:
-        host: 127.0.0.1
-        port: "{{ app_port }}"
-        timeout: 30
-        state: started
-      when: db_type == 'postgresql'
-
-    - name: Initialize PostgreSQL database
-      postgresql_db:
-        name: "{{ db_name | default(service_name) }}"
-        state: present
-        port: "{{ app_port }}"
-        login_unix_socket: "/var/run/postgresql"
-      become_user: postgres
-      when: db_type == 'postgresql'
-
-    - name: Create PostgreSQL user
-      postgresql_user:
-        name: "{{ db_user | default(service_name) }}"
-        password: "{{ db_password }}"
-        state: present
-        port: "{{ app_port }}"
-        login_unix_socket: "/var/run/postgresql"
-      become_user: postgres
-      when: db_type == 'postgresql'
-
-    - name: Grant ALL privileges on database to user
-      community.postgresql.postgresql_privs:
-        database: "{{ db_name | default(service_name) }}"
-        type: database
-        roles: "{{ db_user | default(service_name) }}"
-        privs: ALL
-        state: present
-        port: "{{ app_port }}"
-        login_unix_socket: "/var/run/postgresql"
-      become_user: postgres
-      when: db_type == 'postgresql'
-
-    # MySQL Configuration
-    - name: Ensure MySQL is running
-      systemd:
-        name: mysql
-        state: started
-        enabled: yes
-      when: db_type == 'mysql'
-
-    - name: Configure MySQL for remote connections
-      lineinfile:
-        path: /etc/mysql/mysql.conf.d/mysqld.cnf
-        regexp: '^bind-address'
-        line: 'bind-address = 0.0.0.0'
-      when: db_type == 'mysql'
-
-    - name: Restart MySQL to apply config
-      systemd:
-        name: mysql
-        state: restarted
-      when: db_type == 'mysql'
-
-    - name: Create MySQL database
-      mysql_db:
-        name: "{{ db_name | default(service_name) }}"
-        state: present
-      when: db_type == 'mysql'
-
-    - name: Create MySQL user
-      mysql_user:
-        name: "{{ db_user | default(service_name) }}"
-        password: "{{ db_password }}"
-        priv: "{{ db_name | default(service_name) }}.*:ALL"
-        state: present
-      when: db_type == 'mysql'
-
-    # Redis Configuration
-    - name: Configure Redis
-      lineinfile:
-        path: /etc/redis/redis.conf
-        regexp: '^bind'
-        line: 'bind 0.0.0.0'
-      when: db_type == 'redis'
-
-    - name: Ensure Redis is running
-      systemd:
-        name: redis-server
-        state: started
-        enabled: yes
-      when: db_type == 'redis'
-
-    # MongoDB Configuration
-    - name: Ensure MongoDB is running
-      systemd:
-        name: mongod
-        state: started
-        enabled: yes
-      when: db_type == 'mongodb'
-
-    - name: Configure MongoDB for remote connections
-      lineinfile:
-        path: /etc/mongod.conf
-        regexp: '^  bindIp:'
-        line: '  bindIp: 0.0.0.0'
-      when: db_type == 'mongodb'
-
-    - name: Restart MongoDB to apply config
-      systemd:
-        name: mongod
-        state: restarted
-      when: db_type == 'mongodb'
+    # SERVICE-SPECIFIC INJECTION POINT: Runtime Installation
+    {% if service_runtime_install is defined and service_runtime_install %}
+    {% include 'service-parts/runtime_install.yml.j2' %}
+    {% endif %}
 
     - name: Create application user
       user:
@@ -436,9 +224,50 @@
         group: "{{ app_user }}"
         mode: '0755'
 
+    - name: Copy and extract application files
+      block:
+        - name: Copy tar archive to container
+          copy:
+            src: "/tmp/{{ service_name }}-app.tar.gz"
+            dest: "/tmp/{{ service_name }}-app.tar.gz"
+            mode: '0644'
+
+        - name: Extract application files
+          unarchive:
+            src: "/tmp/{{ service_name }}-app.tar.gz"
+            dest: "{{ app_dir }}"
+            remote_src: yes
+            owner: "{{ app_user }}"
+            group: "{{ app_user }}"
+
+        - name: Clean up tar files on remote container
+          file:
+            path: "/tmp/{{ service_name }}-app.tar.gz"
+            state: absent
+
+      when: service_type != 'database'
+
+    - name: Set ownership of application files
+      file:
+        path: "{{ app_dir }}"
+        owner: "{{ app_user }}"
+        group: "{{ app_user }}"
+        recurse: yes
+      when: service_type != 'database'
+
+    # SERVICE-SPECIFIC INJECTION POINT: Dependency Installation
+    {% if service_dependency_install is defined and service_dependency_install %}
+    {% include 'service-parts/dependency_install.yml.j2' %}
+    {% endif %}
+
+    # SERVICE-SPECIFIC INJECTION POINT: Build Tasks
+    {% if service_build_tasks is defined and service_build_tasks %}
+    {% include 'service-parts/build_tasks.yml.j2' %}
+    {% endif %}
+
     - name: Upload custom deployment script to container
       copy:
-        src: "{{ secure_temp_dir }}/custom_script.sh"
+        src: "/tmp/{{ service_name }}-custom_script.sh"
         dest: "/opt/custom_script.sh"
         mode: '0755'
         owner: root
@@ -453,12 +282,9 @@
       environment:
         APP_DIR: "{{ app_dir }}"
         SERVICE_TYPE: "{{ service_type | default('') }}"
+        NODEJS_RUNTIME: "{{ nodejs_runtime | default('') }}"
         APP_PORT: "{{ app_port | string }}"
         SERVICE_NAME: "{{ service_name }}"
-        DB_TYPE: "{{ db_type }}"
-        DB_NAME: "{{ db_name | default(service_name) }}"
-        DB_USER: "{{ db_user | default(service_name) }}"
-        DB_PASSWORD: "{{ db_password }}"
       register: custom_script_result
       changed_when: false
       failed_when: false
@@ -468,6 +294,39 @@
       debug:
         var: custom_script_result.stdout_lines
       when: hostvars['localhost']['local_custom_script'].stat.exists
+
+    - name: Create environment file
+      template:
+        src: env.j2
+        dest: "{{ app_dir }}/.env"
+        owner: "{{ app_user }}"
+        group: "{{ app_user }}"
+        mode: '0600'
+      when: service_type != 'database'
+
+    # SERVICE-SPECIFIC INJECTION POINT: Systemd Service
+    {% if service_systemd_service is defined and service_systemd_service %}
+    - name: Create systemd service file
+      template:
+        src: "{{ app_service_name }}.service.j2"
+        dest: "/etc/systemd/system/{{ app_service_name }}.service"
+        mode: '0644'
+      notify: reload systemd
+      when: service_type != 'database'
+
+    - name: Enable and start application service
+      systemd:
+        name: "{{ app_service_name }}"
+        enabled: yes
+        state: started
+        daemon_reload: yes
+      when: service_type != 'database'
+    {% endif %}
+
+    - name: Wait for service to be running
+      pause:
+        seconds: 5
+      when: service_type != 'database'
 
     - name: Configure container DNS to use our DNS server
       copy:
@@ -573,19 +432,19 @@
         - name: Generate new tunnel configuration
           template:
             src: cloudflare-tunnel-config.yml.j2
-            dest: "{{ secure_temp_dir }}/tunnel_config.yml"
+            dest: /tmp/new_tunnel_config.yml
           run_once: true
           
         - name: Upload new tunnel configuration
           copy:
-            src: "{{ secure_temp_dir }}/tunnel_config.yml"
+            src: /tmp/new_tunnel_config.yml
             dest: /etc/cloudflared/config.yml
           delegate_to: "{{ proxmox_host }}"
           run_once: true
           
         - name: Clean up temporary config file
           file:
-            path: "{{ secure_temp_dir }}/tunnel_config.yml"
+            path: /tmp/new_tunnel_config.yml
             state: absent
           run_once: true
           
@@ -619,52 +478,61 @@
               
       when: cloudflare_enabled | bool
 
-    # DATABASE STATUS CHECKS
-    - name: Test database connectivity
-      block:
-        - name: Test PostgreSQL connection
-          postgresql_ping:
-            db: "{{ db_name | default(service_name) }}"
-            login_host: "127.0.0.1"
-            login_port: "{{ app_port }}"
-            login_user: "{{ db_user | default(service_name) }}"
-            login_password: "{{ db_password }}"
-          register: pg_connection_test
-          when: db_type == 'postgresql'
+    # SERVICE STATUS CHECKS (only if systemd service is enabled)
+    {% if service_systemd_service is defined and service_systemd_service %}
+    - name: Check service status
+      systemd:
+        name: "{{ app_service_name }}"
+      register: service_status
+      when: service_type != 'database'
 
-        - name: Test MySQL connection
-          mysql_info:
-            login_host: "127.0.0.1"
-            login_port: "{{ app_port }}"
-            login_user: "{{ db_user | default(service_name) }}"
-            login_password: "{{ db_password }}"
-          register: mysql_connection_test
-          when: db_type == 'mysql'
-
-        - name: Test Redis connection
-          redis:
-            command: ping
-            login_host: "127.0.0.1"
-            login_port: "{{ app_port }}"
-          register: redis_connection_test
-          when: db_type == 'redis'
-
-      ignore_errors: true
-
-    - name: Display database status
+    - name: Display service status
       debug:
         msg: |
-          {{ service_name }} Database Status:
-          - Type: {{ db_type }}
-          - Host: {{ ansible_host }}:{{ app_port }}
-          - Database: {{ db_name | default(service_name) }}
-          - User: {{ db_user | default(service_name) }}
-          - Connection: {{ 'OK' if (pg_connection_test.is_available | default(false)) or (mysql_connection_test is succeeded) or (redis_connection_test is succeeded) else 'Failed' }}
+          {{ service_name }} Service Status: {{ service_status.status.ActiveState }}
+          Service is {{ 'running' if service_status.status.ActiveState == 'active' else 'not running' }}
+      when: service_type != 'database'
+
+    - name: Test application endpoint
+      uri:
+        url: "http://{{ ansible_host }}:{{ app_port }}{{ health_check_path | default('/health') }}"
+        method: GET
+        timeout: 10
+      register: health_check
+      ignore_errors: yes
+      when: service_type != 'database'
+
+    - name: Display health check result
+      debug:
+        msg: |
+          {{ service_name }} Health check status: {{ health_check.status | default('unknown') }}
+          Endpoint: http://{{ ansible_host }}:{{ app_port }}{{ health_check_path | default('/health') }}
+      when: service_type != 'database'
+
+    - name: Show recent logs
+      command: journalctl -u {{ app_service_name }} --lines=10 --no-pager
+      register: service_logs
+      changed_when: false
+      when: service_type != 'database'
+
+    - name: Display recent logs
+      debug:
+        var: service_logs.stdout_lines
+      when: service_type != 'database'
+    {% endif %}
 
   handlers:
     - name: reload systemd
       systemd:
         daemon_reload: yes
+    - name: restart tor
+      systemd:
+        name: tor
+        state: restarted
+    - name: restart privoxy
+      systemd:
+        name: privoxy
+        state: restarted
 
 # Cleanup play - runs on localhost after deployment completes
 - name: Cleanup deployment artifacts
@@ -674,34 +542,17 @@
   vars_files:
     - ../global-config.yml
     - service-config.yml
-    - ../../vault/vault.yml
-  vars:
-    # Secure temporary directory (replaces /tmp usage)
-    secure_temp_dir: "{{ playbook_dir }}/../.secure_temp/{{ service_name }}_{{ ansible_date_time.epoch }}_{{ ansible_pid | default(9999) }}"
   
   tasks:
-    - name: Create secure temporary directory
-      file:
-        path: "{{ secure_temp_dir }}"
-        state: directory
-        mode: '0700'
-      become: false
-
-    - name: Clean up secure temporary directory
-      file:
-        path: "{{ secure_temp_dir }}"
-        state: absent
-      become: false
-      when: secure_temp_dir is defined
     - name: Clean up local tar file after deployment
       file:
-        path: "{{ secure_temp_dir }}/app.tar.gz"
+        path: "/tmp/{{ service_name }}-app.tar.gz"
         state: absent
       become: false
 
     - name: Clean up temporary custom script
       file:
-        path: "{{ secure_temp_dir }}/custom_script.sh"
+        path: "/tmp/{{ service_name }}-custom_script.sh"
         state: absent
       when: hostvars['localhost']['local_custom_script'].stat.exists
       become: false

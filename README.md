@@ -499,7 +499,7 @@ pxdcli deploy
 
 ## 🗄️ Database Deployments
 
-The system provides robust, production-ready database deployments with automated configuration:
+The system provides robust, production-ready database deployments with automated configuration and **enterprise-grade security**:
 
 ### Supported Database Types
 - **PostgreSQL** - Full ACID compliance with user management
@@ -510,6 +510,7 @@ The system provides robust, production-ready database deployments with automated
 ### Database Features
 - ✅ **Automated Installation** - Database engine and dependencies
 - ✅ **User & Database Creation** - Service-specific credentials
+- ✅ **Secure Password Management** - AES-256 encrypted passwords with SSH key derivation
 - ✅ **Remote Access Configuration** - Network binding and authentication
 - ✅ **Security Setup** - Firewall rules and access controls
 - ✅ **Service Integration** - DNS-based service discovery
@@ -517,7 +518,7 @@ The system provides robust, production-ready database deployments with automated
 
 ### Database Generation Examples
 ```bash
-# PostgreSQL with automatic setup
+# PostgreSQL with automatic setup and secure password management
 pxdcli generate postgres-db --type database --runtime postgresql --port 5432
 
 # MySQL database
@@ -534,9 +535,10 @@ pxdcli generate mongo-db --type database --runtime mongodb --port 27017
 Each database deployment automatically creates:
 - **Database**: Named after the service (e.g., `postgres_db` for service `postgres-db`)
 - **User**: Service-specific user with full database privileges
-- **Password**: Securely generated 16-character password
+- **Password**: Securely generated 32-character AES-256 encrypted password
 - **Remote Access**: Configured for network connections from other services
 - **Firewall**: Appropriate port access rules
+- **Vault Storage**: Encrypted password storage safe for version control
 
 ### Database Connection Examples
 ```python
@@ -569,6 +571,99 @@ import "github.com/go-redis/redis/v8"
 rdb := redis.NewClient(&redis.Options{
     Addr: "redis-cache.proxmox.local:6379",
 })
+```
+
+## 🔒 Security & Password Management
+
+The system includes **enterprise-grade security** with automatic password encryption and secure temporary file handling:
+
+### 🛡️ Vault Security Features
+
+- **AES-256 Encryption** - All passwords encrypted using Ansible Vault
+- **SSH Key Derivation** - Vault password derived from your SSH private key
+- **Safe Version Control** - Encrypted files can be safely committed to git
+- **No Plain Text Storage** - Passwords never stored in plain text
+- **Secure Temporary Files** - No `/tmp` directory usage, project-specific secure directories
+- **Service Isolation** - Each service gets unique encrypted passwords
+
+### 🔐 Automatic Password Management
+
+**Every deployment automatically**:
+- ✅ Initializes vault system if needed
+- ✅ Generates secure 32-character passwords
+- ✅ Encrypts passwords with AES-256
+- ✅ Uses SSH key-based vault encryption
+- ✅ Creates secure temp directories (no `/tmp` usage)
+- ✅ Stores encrypted passwords safely in git
+
+### 📋 Vault Commands
+
+All password management is integrated into the main CLI:
+
+```bash
+# Initialize vault system (automatic on first deployment)
+pxdcli vault-init
+
+# List all encrypted passwords
+pxdcli vault-list
+
+# View specific passwords
+pxdcli vault-show my-database        # Database password
+pxdcli vault-show my-database vm_root # VM root password
+
+# Rotate passwords
+pxdcli vault-rotate my-database      # Database password
+pxdcli vault-rotate my-database vm_root # VM root password
+
+# Create backup of vault files
+pxdcli vault-backup
+```
+
+### 🏗️ Security Architecture
+
+```
+proxmox-deploy-playground/
+├── vault/                          # Vault directory (safe to commit)
+│   ├── .vault_password            # Master password (DO NOT COMMIT)
+│   ├── vault.yml                  # Encrypted passwords (safe to commit)
+│   └── .gitignore                 # Protects master password
+├── .secure_temp/                  # Secure temp files (git-ignored)
+│   ├── .gitignore                 # Excludes all temp files
+│   └── service_op_timestamp_pid/  # Service-specific temp directories
+└── ansible.cfg                    # Ansible configuration
+```
+
+### 🔑 SSH Key Setup
+
+The system uses your SSH key for vault security:
+
+```bash
+# Default location (automatically created if missing)
+ls -la ~/.ssh/proxmox_key
+
+# Manual generation if needed
+ssh-keygen -t ed25519 -f ~/.ssh/proxmox_key
+```
+
+### 🛡️ Security Best Practices
+
+- **SSH Key Management** - Keep your SSH private key secure and backed up
+- **Password Policies** - 32-character cryptographically secure passwords
+- **Regular Rotation** - Rotate passwords regularly for production systems
+- **Team Collaboration** - Share encrypted vault files via git, each member needs SSH key
+- **Backup Strategy** - Create encrypted backups with `pxdcli vault-backup`
+
+### 🔄 Password Rotation Workflow
+
+```bash
+# Rotate password for a service
+pxdcli vault-rotate my-database
+
+# Redeploy service to use new password
+pxdcli deploy my-database
+
+# Verify new password is working
+pxdcli status my-database
 ```
 
 ## 🌐 Service Communication
@@ -653,7 +748,7 @@ The system provides robust container management with enterprise-grade reliabilit
 - **Graceful Degradation** - Clear error messages for troubleshooting
 - **Retry Logic** - Automatic retries for transient network issues
 
-## 🔐 Security & Networking
+## 🌐 Networking & DNS
 
 ### VM Isolation
 - Each service gets its own VM/container
@@ -833,12 +928,13 @@ pxdcli update --file deploy.yml.j2
 - Minimal dependencies (Ansible + Bash)
 - Service-specific templates when needed
 
-### Enterprise-Grade Reliability
-- Robust container creation with task monitoring
-- Exponential backoff for transient failures
-- Comprehensive error handling and reporting
-- Production-ready database configurations
-- Automated security and network setup
+### Enterprise-Grade Security & Reliability
+- **Secure Password Management** - AES-256 encrypted passwords with SSH key derivation
+- **No Security Vulnerabilities** - No `/tmp` directory usage, secure temporary files
+- **Safe Version Control** - Encrypted passwords can be committed to git
+- **Robust Container Creation** - Task monitoring with exponential backoff
+- **Comprehensive Error Handling** - Production-ready database configurations
+- **Automated Security Setup** - Firewall rules and access controls
 
 ### Multi-Language Support
 - Use the right tool for each job
@@ -911,14 +1007,16 @@ service_dependencies:
 
 ---
 
-## 🎉 You now have an enterprise-grade, template-based, multi-language deployment system!
+## 🎉 You now have an enterprise-grade, secure, template-based, multi-language deployment system!
 
 From simple single-service deployments to complex polyglot microservices architectures - all with:
+- **Enterprise-Grade Security** - AES-256 encrypted passwords, SSH key derivation, safe for git
 - **Template-based service generation** using Jinja2 for consistent, high-quality code
 - **Runtime-specific optimizations** (Node.js vs Bun, Python versions, database engines)
 - **Built-in best practices** (health checks, error handling, CORS, environment configuration)
-- **Enterprise-grade reliability** with robust container lifecycle management and task monitoring
-- **Production-ready databases** with automated setup, user management, and security configuration
+- **Robust container lifecycle management** with task monitoring and exponential backoff
+- **Production-ready databases** with automated setup, user management, and secure password storage
+- **No security vulnerabilities** - secure temporary files, no `/tmp` directory usage
 - **DRY and KISS principles** with centralized templates and shared container management
-- **Exponential backoff and retry logic** for handling transient infrastructure issues
 - **Comprehensive error handling** with detailed reporting and graceful degradation
+- **Integrated vault management** - all security features built into the main CLI

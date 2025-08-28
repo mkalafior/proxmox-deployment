@@ -37,7 +37,7 @@
     curl -k -X POST \
       -H "Authorization: PVEAPIToken={{ proxmox_token_id }}={{ proxmox_token_secret }}" \
       -H "Content-Type: application/x-www-form-urlencoded" \
-      -d "vmid={{ vm_id }}&unprivileged={{ (vm_unprivileged | default(true)) | ternary('1', '0') }}&features=nesting%3D1&password={{ (lookup('password', '/tmp/vm_root_password chars=ascii_letters,digits length=16')) | urlencode }}{% if ssh_public_key_content is defined %}&ssh-public-keys={{ ssh_public_key_content.content | b64decode | trim | urlencode }}{% endif %}&ostemplate={{ vm_os_template | urlencode }}&rootfs={{ (vm_storage ~ ':' ~ vm_disk_size) | urlencode }}&cores={{ vm_cores }}&memory={{ vm_memory }}&swap={{ vm_swap }}&net0={{ ('name=eth0,bridge=' ~ vm_network_bridge ~ ',firewall=1,ip=dhcp') | urlencode }}&tags={{ container_tags_combined | urlencode }}" \
+      -d "vmid={{ vm_id }}&unprivileged={{ (vm_unprivileged | default(true)) | ternary('1', '0') }}&features=nesting%3D1&password={{ (vault_passwords['vm_root_' ~ service_name] | default(lookup('password', '/dev/null chars=ascii_letters,digits length=16'))) | urlencode }}{% if ssh_public_key_content is defined %}&ssh-public-keys={{ ssh_public_key_content.content | b64decode | trim | urlencode }}{% endif %}&ostemplate={{ vm_os_template | urlencode }}&rootfs={{ (vm_storage ~ ':' ~ vm_disk_size) | urlencode }}&cores={{ vm_cores }}&memory={{ vm_memory }}&swap={{ vm_swap }}&net0={{ ('name=eth0,bridge=' ~ vm_network_bridge ~ ',firewall=1,ip=dhcp') | urlencode }}&tags={{ container_tags_combined | urlencode }}" \
       "https://{{ proxmox_host }}:8006/api2/json/nodes/{{ proxmox_node }}/lxc"
   register: proxmox_vm
   failed_when: false

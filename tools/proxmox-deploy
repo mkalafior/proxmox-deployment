@@ -99,6 +99,160 @@ load_env_files() {
 # Load environment files automatically
 load_env_files
 
+# Vault management functions
+VAULT_DIR="$PROJECT_ROOT_OVERRIDE/vault"
+SSH_KEY_PATH="$HOME/.ssh/proxmox_key"
+
+# Initialize vault system if needed
+init_vault_if_needed() {
+  if [[ ! -d "$VAULT_DIR" || ! -f "$VAULT_DIR/.vault_password" || ! -f "$VAULT_DIR/vault.yml" ]]; then
+    echo "🔒 Initializing secure vault system..."
+    init_vault_system
+  fi
+}
+
+# Generate vault password from SSH key
+generate_vault_password() {
+  if [[ ! -f "$SSH_KEY_PATH" ]]; then
+    echo "🔑 Generating SSH key for vault security..."
+    ssh-keygen -t ed25519 -f "$SSH_KEY_PATH" -N "" -C "proxmox-deploy-vault-$(date +%Y%m%d)"
+  fi
+  # Create deterministic password from SSH key
+  ssh-keygen -f "$SSH_KEY_PATH" -y | sha256sum | cut -d' ' -f1
+}
+
+# Initialize vault system
+init_vault_system() {
+  mkdir -p "$VAULT_DIR"
+  
+  # Create vault password file
+  local vault_password_file="$VAULT_DIR/.vault_password"
+  generate_vault_password > "$vault_password_file"
+  chmod 600 "$vault_password_file"
+  
+  # Create .gitignore for vault directory
+  cat > "$VAULT_DIR/.gitignore" << 'EOF'
+# Exclude vault password file (contains decryption key)
+.vault_password
+
+# Include encrypted vault files (safe to commit)
+!*.vault
+!vault.yml
+EOF
+
+  # Create main vault file
+  local vault_file="$VAULT_DIR/vault.yml"
+  if [[ ! -f "$vault_file" ]]; then
+    local temp_vault_file="$VAULT_DIR/.vault_template_$$"
+    cat > "$temp_vault_file" << 'EOF'
+# Encrypted database passwords for Proxmox Deploy services
+# This file contains Ansible Vault encrypted passwords
+# Safe to commit to version control
+
+vault_passwords: {}
+EOF
+    ansible-vault encrypt "$temp_vault_file" --vault-password-file "$vault_password_file" --encrypt-vault-id default
+    mv "$temp_vault_file" "$vault_file"
+  fi
+  
+  # Create/update ansible.cfg
+  local ansible_cfg="$PROJECT_ROOT_OVERRIDE/ansible.cfg"
+  if [[ ! -f "$ansible_cfg" ]]; then
+    cat > "$ansible_cfg" << EOF
+[defaults]
+vault_password_file = vault/.vault_password
+host_key_checking = False
+stdout_callback = yaml
+EOF
+  else
+    if ! grep -q "vault_password_file" "$ansible_cfg"; then
+      echo "vault_password_file = vault/.vault_password" >> "$ansible_cfg"
+    fi
+  fi
+  
+  # Initialize secure temp directory
+  mkdir -p "$PROJECT_ROOT_OVERRIDE/.secure_temp"
+  chmod 700 "$PROJECT_ROOT_OVERRIDE/.secure_temp"
+  cat > "$PROJECT_ROOT_OVERRIDE/.secure_temp/.gitignore" << 'EOF'
+# Exclude all temporary files - they should never be committed
+*
+!.gitignore
+EOF
+  
+  echo "✅ Vault system initialized with SSH key: $SSH_KEY_PATH"
+}
+
+# Generate secure password
+generate_secure_password() {
+  local length=${1:-32}
+  openssl rand -base64 $((length * 3 / 4)) | tr -d "=+/" | cut -c1-${length}
+}
+
+# Encrypt password for service
+encrypt_service_password() {
+  local service_name="$1"
+  local password_type="${2:-db}"  # db or vm_root
+  
+  local vault_file="$VAULT_DIR/vault.yml"
+  local vault_password_file="$VAULT_DIR/.vault_password"
+  
+  local password_key="$service_name"
+  if [[ "$password_type" == "vm_root" ]]; then
+    password_key="vm_root_$service_name"
+  fi
+  
+  # Check if password already exists
+  if ansible-vault view "$vault_file" --vault-password-file "$vault_password_file" 2>/dev/null | grep -q "^  ${password_key}:"; then
+    echo "🔒 Password for '$password_key' already exists in vault"
+    return 0
+  fi
+  
+  # Generate new password
+  local new_password=$(generate_secure_password 32)
+  
+  # Decrypt, update, re-encrypt
+  local temp_file="$VAULT_DIR/.temp_vault_$$_$(date +%s)"
+  ansible-vault decrypt "$vault_file" --vault-password-file "$vault_password_file" --output "$temp_file"
+  
+  # Update YAML with Python
+  python3 << EOF
+import yaml
+import sys
+
+with open('$temp_file', 'r') as f:
+    data = yaml.safe_load(f) or {}
+
+if 'vault_passwords' not in data:
+    data['vault_passwords'] = {}
+
+data['vault_passwords']['$password_key'] = '$new_password'
+
+with open('$temp_file', 'w') as f:
+    yaml.dump(data, f, default_flow_style=False)
+EOF
+  
+  ansible-vault encrypt "$temp_file" --vault-password-file "$vault_password_file" --encrypt-vault-id default
+  mv "$temp_file" "$vault_file"
+  
+  echo "🔐 Generated and encrypted password for: $password_key"
+}
+
+# Ensure service has required passwords
+ensure_service_passwords() {
+  local service_name="$1"
+  local service_type="$2"
+  
+  init_vault_if_needed
+  
+  # For database services, ensure db password exists
+  if [[ "$service_type" == "database" ]]; then
+    encrypt_service_password "$service_name" "db"
+  fi
+  
+  # For all services, ensure VM root password exists
+  encrypt_service_password "$service_name" "vm_root"
+}
+
 ensure_templates() {
   # Skip git operations if using local templates from the repository
   if [[ -n "$LOCAL_REPO_ROOT" && "$TEMPLATES_ROOT" == "$LOCAL_REPO_ROOT" ]]; then
@@ -125,9 +279,10 @@ yaml_get_key() {
 # Helper: determine FQDN for a service
 service_fqdn() {
   local svc_dir="$1"; shift
-  local gv="$svc_dir/group_vars/all.yml"
-  local host="$(yaml_get_key "$gv" "service_hostname")"
-  local domain="$(yaml_get_key "$gv" "dns_domain")"
+  local config_file="$svc_dir/service-config.yml"
+  local global_config="$(dirname "$svc_dir")/global-config.yml"
+  local host="$(yaml_get_key "$config_file" "service_hostname")"
+  local domain="$(yaml_get_key "$global_config" "dns_domain")"
   if [[ -n "$host" && -n "$domain" ]]; then
     echo "$host.$domain"
   else
@@ -138,14 +293,9 @@ service_fqdn() {
 # Helper: get VM IP via Proxmox API using node and VM_ID
 service_ip_via_api() {
   local svc_dir="$1"; shift
-  local gv="$svc_dir/group_vars/all.yml"
-  local node="$(yaml_get_key "$gv" "proxmox_node")"
-  local vmid=""
-  if [[ -f "$svc_dir/env.service" ]]; then
-    # shellcheck disable=SC1090
-    source "$svc_dir/env.service" 2>/dev/null || true
-    vmid="${VM_ID:-}"
-  fi
+  local config_file="$svc_dir/service-config.yml"
+  local node="$(yaml_get_key "$config_file" "proxmox_node")"
+  local vmid="$(yaml_get_key "$config_file" "vm_id")"
   if [[ -z "${PROXMOX_HOST:-}" || -z "${TOKEN_ID:-}" || -z "${TOKEN_SECRET:-}" || -z "$node" || -z "$vmid" ]]; then
     echo ""; return 0
   fi
@@ -194,10 +344,9 @@ determine_units() {
   local svc_dir="$1"; shift
   local default_unit="$1"; shift || true
   local config_file="$svc_dir/service-config.yml"
-  local group_vars_file="$svc_dir/group_vars/all.yml"
   local units=""
   local service_type="$(yaml_get_key "$config_file" "service_type")"
-  local app_service_name="$(yaml_get_key "$group_vars_file" "app_service_name")"
+  local app_service_name="$(yaml_get_key "$config_file" "app_service_name")"
   [[ -z "$app_service_name" ]] && app_service_name="$default_unit"
 
   if [[ "$service_type" == "database" ]]; then
@@ -256,6 +405,11 @@ usage() {
   echo "  info <service>                           # Show service info (FQDN, IP, ports)"
   echo "  ssh <service>                            # SSH into service host"
   echo "  nodes                                    # List Proxmox nodes (requires TOKEN_ID/TOKEN_SECRET)"
+  echo "  vault-init                               # Initialize vault system"
+  echo "  vault-list                               # List encrypted passwords"
+  echo "  vault-show <service> [type]              # Show password for service (type: db|vm_root)"
+  echo "  vault-rotate <service> [type]            # Rotate password for service"
+  echo "  vault-backup                             # Create backup of vault files"
   echo "  help"
 }
 
@@ -331,7 +485,7 @@ case "$CMD" in
     svc="${1:-}"
     if [[ -z "$svc" ]]; then echo "Missing service name"; exit 1; fi
     svc_dir="$PROJECT_ROOT_OVERRIDE/deployments/$svc"
-    echo "🚀 Deploying service..."
+    echo "🚀 Deploying service with vault security..."
     echo "📁 Service directory: $svc_dir"
     if [[ ! -d "$svc_dir" ]]; then
       echo "❌ Service directory not found: $svc_dir"
@@ -339,6 +493,17 @@ case "$CMD" in
       find "$PROJECT_ROOT_OVERRIDE/deployments" -mindepth 1 -maxdepth 1 -type d -exec basename {} \; 2>/dev/null | sort || echo "   (none found)"
       exit 1
     fi
+    
+    # Determine service type
+    service_type=""
+    if [[ -f "$svc_dir/service-config.yml" ]]; then
+      service_type=$(grep -E '^service_type:' "$svc_dir/service-config.yml" | awk -F: '{print $2}' | xargs || true)
+    fi
+    
+    # Ensure vault passwords exist
+    echo "🔒 Managing secure passwords..."
+    ensure_service_passwords "$svc" "$service_type"
+    
     echo "📋 Service files:"
     ls -la "$svc_dir" | head -10
     ( cd "$svc_dir" && ./deploy.sh )
@@ -352,8 +517,8 @@ case "$CMD" in
     
     # Check if service supports redeployment
     service_type=""
-    if [[ -f "$svc_dir/group_vars/all.yml" ]]; then
-      service_type=$(grep -E '^service_type:' "$svc_dir/group_vars/all.yml" | awk -F: '{print $2}' | xargs || true)
+    if [[ -f "$svc_dir/service-config.yml" ]]; then
+      service_type=$(grep -E '^service_type:' "$svc_dir/service-config.yml" | awk -F: '{print $2}' | xargs || true)
     fi
     
     if [[ ! "$service_type" =~ ^(nodejs|python|golang|static)$ ]]; then
@@ -384,8 +549,8 @@ case "$CMD" in
       
       # Check service type
       service_type=""
-      if [[ -f "$root_dir/$svc/group_vars/all.yml" ]]; then
-        service_type=$(grep -E '^service_type:' "$root_dir/$svc/group_vars/all.yml" | awk -F: '{print $2}' | xargs || true)
+      if [[ -f "$root_dir/$svc/service-config.yml" ]]; then
+        service_type=$(grep -E '^service_type:' "$root_dir/$svc/service-config.yml" | awk -F: '{print $2}' | xargs || true)
       fi
       
       if [[ "$service_type" =~ ^(nodejs|python|golang|static)$ ]]; then
@@ -403,19 +568,30 @@ case "$CMD" in
     done
     ;;
   deploy-all)
-    # Deploy all services
+    # Deploy all services with vault security
     root_dir="$PROJECT_ROOT_OVERRIDE/deployments"
     if [[ ! -d "$root_dir" ]]; then
       echo "No deployments directory found at: $root_dir"
       exit 0
     fi
-    echo "🚀 Deploying all services..."
-    echo "============================"
+    echo "🚀 Deploying all services with vault security..."
+    echo "================================================"
     find "$root_dir" -mindepth 1 -maxdepth 1 -type d -exec basename {} \; | sort | while read -r svc; do
       [[ -z "$svc" ]] && continue
       echo ""
       echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
       echo "🔄 Deploying: $svc"
+      
+      # Determine service type
+      service_type=""
+      if [[ -f "$root_dir/$svc/service-config.yml" ]]; then
+        service_type=$(grep -E '^service_type:' "$root_dir/$svc/service-config.yml" | awk -F: '{print $2}' | xargs || true)
+      fi
+      
+      # Ensure vault passwords exist
+      echo "🔒 Managing secure passwords for $svc..."
+      ensure_service_passwords "$svc" "$service_type"
+      
       if [[ -f "$root_dir/$svc/deploy.sh" ]]; then
         ( cd "$root_dir/$svc" && ./deploy.sh ) || echo "❌ Failed to deploy $svc"
       else
@@ -639,6 +815,103 @@ case "$CMD" in
     }
     if [[ -z "$fqdn" ]]; then echo "FQDN not found for $svc"; exit 1; fi
     exec ssh -i "$HOME/.ssh/id_proxmox" root@"$fqdn"
+    ;;
+  vault-init)
+    echo "🔒 Initializing vault system..."
+    init_vault_system
+    ;;
+  vault-list)
+    init_vault_if_needed
+    echo "🔐 Encrypted passwords in vault:"
+    ansible-vault view "$VAULT_DIR/vault.yml" --vault-password-file "$VAULT_DIR/.vault_password" | python3 -c "
+import yaml
+import sys
+data = yaml.safe_load(sys.stdin)
+passwords = data.get('vault_passwords', {})
+if passwords:
+    for service in sorted(passwords.keys()):
+        print(f'  - {service}')
+else:
+    print('  (no passwords stored)')
+"
+    ;;
+  vault-show)
+    svc="${1:-}"
+    password_type="${2:-db}"
+    if [[ -z "$svc" ]]; then echo "Missing service name"; exit 1; fi
+    init_vault_if_needed
+    
+    password_key="$svc"
+    if [[ "$password_type" == "vm_root" ]]; then
+      password_key="vm_root_$svc"
+    fi
+    
+    password=$(ansible-vault view "$VAULT_DIR/vault.yml" --vault-password-file "$VAULT_DIR/.vault_password" | python3 -c "
+import yaml
+import sys
+data = yaml.safe_load(sys.stdin)
+passwords = data.get('vault_passwords', {})
+if '$password_key' in passwords:
+    print(passwords['$password_key'])
+else:
+    sys.exit(1)
+" 2>/dev/null)
+    
+    if [[ $? -eq 0 && -n "$password" ]]; then
+      echo "$password"
+    else
+      echo "❌ Password for '$password_key' not found in vault"
+      exit 1
+    fi
+    ;;
+  vault-rotate)
+    svc="${1:-}"
+    password_type="${2:-db}"
+    if [[ -z "$svc" ]]; then echo "Missing service name"; exit 1; fi
+    init_vault_if_needed
+    
+    password_key="$svc"
+    if [[ "$password_type" == "vm_root" ]]; then
+      password_key="vm_root_$svc"
+    fi
+    
+    echo "🔄 Rotating password for: $password_key"
+    
+    # Force regenerate by removing existing password first
+    temp_file="$VAULT_DIR/.temp_vault_$$_$(date +%s)"
+    ansible-vault decrypt "$VAULT_DIR/vault.yml" --vault-password-file "$VAULT_DIR/.vault_password" --output "$temp_file"
+    
+    python3 << EOF
+import yaml
+import sys
+
+with open('$temp_file', 'r') as f:
+    data = yaml.safe_load(f) or {}
+
+if 'vault_passwords' not in data:
+    data['vault_passwords'] = {}
+
+# Remove existing password to force regeneration
+if '$password_key' in data['vault_passwords']:
+    del data['vault_passwords']['$password_key']
+
+with open('$temp_file', 'w') as f:
+    yaml.dump(data, f, default_flow_style=False)
+EOF
+    
+    ansible-vault encrypt "$temp_file" --vault-password-file "$VAULT_DIR/.vault_password" --encrypt-vault-id default
+    mv "$temp_file" "$VAULT_DIR/vault.yml"
+    
+    # Now generate new password
+    encrypt_service_password "$svc" "$password_type"
+    echo "✅ Password rotated successfully"
+    ;;
+  vault-backup)
+    init_vault_if_needed
+    backup_file="vault_backup_$(date +%Y%m%d_%H%M%S).tar.gz"
+    tar -czf "$backup_file" -C "$PROJECT_ROOT_OVERRIDE" vault/
+    echo "✅ Vault backup created: $backup_file"
+    echo "🔒 Store this backup securely - it contains encrypted passwords"
     ;;
   help|*)
     usage

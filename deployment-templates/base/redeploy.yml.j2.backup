@@ -9,23 +9,7 @@
     - ../global-config.yml
     - service-config.yml
   
-  vars:
-    health_check_path: "/health"
-    # Secure temporary directory (replaces /tmp usage)
-    secure_temp_dir: "{{ playbook_dir }}/../.secure_temp/{{ service_name }}_{{ ansible_date_time.epoch }}_{{ ansible_pid | default(9999) }}"
-  
   tasks:
-    - name: Create secure temporary directory
-      file:
-        path: "{{ secure_temp_dir }}"
-        state: directory
-        mode: '0700'
-      become: false
-
-    - name: Set secure temp directory as fact for other plays
-      set_fact:
-        shared_secure_temp_dir: "{{ secure_temp_dir }}"
-
     - name: Validate service configuration
       assert:
         that:
@@ -74,15 +58,14 @@
         headers:
           Authorization: "{{ 'PVEAPIToken=' + proxmox_token_id + '=' + proxmox_token_secret if (proxmox_token_id != '' and proxmox_token_secret != '') else omit }}"
         validate_certs: false
-        status_code: [200, 501]
+        status_code: [200]
       register: vm_network_info
-      failed_when: false
       when: proxmox_token_id != '' and proxmox_token_secret != ''
 
     - name: Extract container IP
       set_fact:
         container_ip: "{{ vm_network_info.json.data.result | selectattr('name', 'match', '^eth0$') | map(attribute='ip-addresses') | first | selectattr('ip-address-type', 'equalto', 'ipv4') | map(attribute='ip-address') | first }}"
-      when: vm_network_info is defined and vm_network_info.status == 200 and vm_network_info.json.data.result is defined
+      when: vm_network_info is defined and vm_network_info.json.data.result is defined
 
     - name: Fallback to DNS resolution if API unavailable
       set_fact:
@@ -111,7 +94,6 @@
         ansible_host: "{{ container_ip }}"
         ansible_user: root
         ansible_ssh_private_key_file: "{{ ssh_public_key_path | replace('.pub', '') }}"
-        ansible_ssh_common_args: "-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
 
     - name: Detect local custom deployment script
       stat:
@@ -122,7 +104,7 @@
     - name: Copy custom deployment script to temporary location
       copy:
         src: "{{ playbook_dir }}/scripts/custom_script.sh"
-        dest: "{{ secure_temp_dir }}/custom_script.sh"
+        dest: "/tmp/{{ service_name }}-custom_script.sh"
         mode: '0755'
       when: hostvars['localhost']['local_custom_script'].stat.exists
       become: false
@@ -150,7 +132,7 @@
         fi
         
         # Create tar with dynamic exclusions
-        eval "tar $EXCLUDE_OPTS -czf {{ secure_temp_dir }}/redeploy.tar.gz ."
+        eval "tar $EXCLUDE_OPTS -czf /tmp/{{ service_name }}-redeploy.tar.gz ."
       become: false
       when: container_ip is defined
 
@@ -161,20 +143,10 @@
     - ../global-config.yml
     - service-config.yml
   
-  vars:
-    # Use shared secure temp directory from first play
-    secure_temp_dir: "{{ hostvars['localhost']['shared_secure_temp_dir'] }}"
-  
   tasks:
     - name: Wait for system to be ready
       wait_for_connection:
         timeout: 30
-
-    - name: Create secure temporary directory on remote
-      file:
-        path: "{{ secure_temp_dir }}"
-        state: directory
-        mode: '0700'
 
     - name: Check current service status
       systemd:
@@ -212,13 +184,13 @@
       block:
         - name: Copy tar archive to container
           copy:
-            src: "{{ secure_temp_dir }}/redeploy.tar.gz"
-            dest: "{{ secure_temp_dir }}/redeploy.tar.gz"
+            src: "/tmp/{{ service_name }}-redeploy.tar.gz"
+            dest: "/tmp/{{ service_name }}-redeploy.tar.gz"
             mode: '0644'
 
         - name: Extract application files
           unarchive:
-            src: "{{ secure_temp_dir }}/redeploy.tar.gz"
+            src: "/tmp/{{ service_name }}-redeploy.tar.gz"
             dest: "{{ app_dir }}"
             remote_src: yes
             owner: "{{ app_user }}"
@@ -226,7 +198,7 @@
 
         - name: Clean up tar files
           file:
-            path: "{{ secure_temp_dir }}/redeploy.tar.gz"
+            path: "/tmp/{{ service_name }}-redeploy.tar.gz"
             state: absent
 
 
@@ -245,7 +217,7 @@
 
     - name: Upload custom deployment script to container
       copy:
-        src: "{{ secure_temp_dir }}/custom_script.sh"
+        src: "/tmp/{{ service_name }}-custom_script.sh"
         dest: "/opt/custom_script.sh"
         mode: '0755'
         owner: root
@@ -352,20 +324,16 @@
     - ../global-config.yml
     - service-config.yml
   
-  vars:
-    # Use shared secure temp directory from first play
-    secure_temp_dir: "{{ hostvars['localhost']['shared_secure_temp_dir'] }}"
-  
   tasks:
     - name: Clean up local tar file after redeployment
       file:
-        path: "{{ secure_temp_dir }}/redeploy.tar.gz"
+        path: "/tmp/{{ service_name }}-redeploy.tar.gz"
         state: absent
       become: false
 
     - name: Clean up temporary custom script
       file:
-        path: "{{ secure_temp_dir }}/custom_script.sh"
+        path: "/tmp/{{ service_name }}-custom_script.sh"
         state: absent
       when: hostvars['localhost']['local_custom_script'].stat.exists
       become: false
