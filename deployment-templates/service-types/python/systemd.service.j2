@@ -7,7 +7,7 @@ Type=simple
 User={{ app_user }}
 Group={{ app_user }}
 WorkingDirectory={{ app_dir }}
-ExecStart=/bin/bash -c 'cd {{ app_dir }} && if [ -f ./venv/bin/python ]; then ./venv/bin/python {{ app_main_file | default("app.py") }}; else ./venv/bin/python3 {{ app_main_file | default("app.py") }}; fi'
+ExecStart=/bin/bash -c 'cd {{ app_dir }} && if [ -f ./venv/bin/python ]; then PYTHON=./venv/bin/python; else PYTHON=./venv/bin/python3; fi; MAIN_FILE="{{ app_main_file | default("app.py") }}"; if [[ "$MAIN_FILE" == */* ]] && [[ "$MAIN_FILE" == *.py ]]; then MODULE_PATH=$(echo "$MAIN_FILE" | sed "s|/|.|g" | sed "s|\.py$||"); echo "Running as module: $MODULE_PATH"; $PYTHON -m "$MODULE_PATH"; else echo "Running as script: $MAIN_FILE"; $PYTHON "$MAIN_FILE"; fi'
 Restart=always
 RestartSec=10
 Environment=PYTHONPATH={{ app_dir }}
