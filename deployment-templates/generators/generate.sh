@@ -121,6 +121,39 @@ if [[ -z "$SERVICE_NAME" ]]; then
     exit 1
 fi
 
+# Check if this is an update (existing deployment exists)  
+DEPLOYMENT_DIR="$TARGET_PROJECT_ROOT/deployments/$SERVICE_NAME"
+UPDATE_MODE=false
+if [[ -d "$DEPLOYMENT_DIR" && -f "$DEPLOYMENT_DIR/service-config.yml" ]]; then
+    UPDATE_MODE=true
+    log_info "🔄 Existing deployment detected, entering update mode"
+    
+    # Read existing configuration from service-config.yml
+    if [[ -z "$SERVICE_TYPE" ]]; then
+        SERVICE_TYPE=$(grep -E '^service_type:' "$DEPLOYMENT_DIR/service-config.yml" | awk -F: '{print $2}' | xargs || true)
+    fi
+    if [[ -z "$APP_PORT" ]]; then
+        APP_PORT=$(grep -E '^app_port:' "$DEPLOYMENT_DIR/service-config.yml" | awk -F: '{print $2}' | xargs || true)
+    fi
+    if [[ -z "$PROXMOX_NODE" ]]; then
+        PROXMOX_NODE=$(grep -E '^proxmox_node:' "$DEPLOYMENT_DIR/service-config.yml" | awk -F: '{print $2}' | xargs || true)
+    fi
+    if [[ -z "$VM_ID" ]]; then
+        VM_ID=$(grep -E '^vm_id:' "$DEPLOYMENT_DIR/service-config.yml" | awk -F: '{print $2}' | xargs || true)
+    fi
+    if [[ -z "$RUNTIME_VARIANT" ]]; then
+        # Try to detect runtime variant from existing config
+        if [[ "$SERVICE_TYPE" == "nodejs" ]]; then
+            RUNTIME_VARIANT=$(grep -E '^nodejs_runtime:' "$DEPLOYMENT_DIR/service-config.yml" | awk -F: '{print $2}' | xargs || true)
+        elif [[ "$SERVICE_TYPE" == "database" ]]; then
+            RUNTIME_VARIANT=$(grep -E '^database_runtime:' "$DEPLOYMENT_DIR/service-config.yml" | awk -F: '{print $2}' | xargs || true)
+        fi
+    fi
+    
+    log_info "📋 Read from existing config: type=$SERVICE_TYPE, port=$APP_PORT, node=$PROXMOX_NODE"
+fi
+
+# Validate required arguments (only if not in update mode or values still missing)
 if [[ -z "$SERVICE_TYPE" ]]; then
     log_error "Missing required argument: --type"
     show_help
@@ -226,7 +259,7 @@ log_info "   Runtime: ${RUNTIME_VARIANT:-default}"
 
 # Set up paths
 SERVICE_DIR="$TARGET_PROJECT_ROOT/services/$SERVICE_NAME"
-DEPLOYMENT_DIR="$TARGET_PROJECT_ROOT/deployments/$SERVICE_NAME"
+# DEPLOYMENT_DIR already defined earlier for update mode detection
 
 # Create service starter files (if directory doesn't exist)
 create_service_files() {
