@@ -2,6 +2,48 @@
 service_type: signal-api
 runtime_name: "Signal CLI REST API"
 
+# Runtime installation tasks
+runtime_install:
+  - name: "Install Java runtime"
+    apt:
+      name:
+        - "openjdk-17-jdk"
+        - "openjdk-17-jre"
+      state: present
+  
+  - name: "Install Go runtime"
+    shell: |
+      cd /tmp
+      wget https://go.dev/dl/go1.21.0.linux-amd64.tar.gz
+      tar -C /usr/local -xzf go1.21.0.linux-amd64.tar.gz
+      ln -sf /usr/local/go/bin/go /usr/local/bin/go
+    args:
+      creates: /usr/local/bin/go
+
+# Dependency installation
+dependency_install:
+  - name: "Download and setup Signal CLI"
+    shell: |
+      cd /tmp
+      wget https://github.com/AsamK/signal-cli/releases/download/v0.13.5/signal-cli-0.13.5.tar.gz
+      tar -C /opt -xzf signal-cli-0.13.5.tar.gz
+      ln -sf /opt/signal-cli-0.13.5/bin/signal-cli /usr/local/bin/signal-cli
+    args:
+      creates: /usr/local/bin/signal-cli
+  
+  - name: "Clone and build Signal CLI REST API"
+    shell: |
+      export PATH=$PATH:/usr/local/go/bin
+      git clone https://github.com/bbernhard/signal-cli-rest-api.git .
+      go mod download
+      go build -o {{ app_service_name }} ./src
+    args:
+      chdir: "{{ app_dir }}"
+    become_user: "{{ app_user }}"
+    environment:
+      GOOS: linux
+      GOARCH: amd64
+
 # Template parts provided by this service type
 provides_runtime_install: true
 provides_dependency_install: true
@@ -47,3 +89,7 @@ systemd_service:
 signal_cli_version: "0.13.5"  # Latest stable version
 graalvm_version: "22.3.0"     # For native compilation
 java_version: "17"            # Required Java version
+
+# Repository configuration for deployment and redeployment
+signal_api_repo: "https://github.com/bbernhard/signal-cli-rest-api.git"
+signal_api_version: "HEAD"    # Can be overridden in service-config.yml to specify commit/tag

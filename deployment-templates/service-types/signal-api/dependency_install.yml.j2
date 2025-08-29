@@ -1,142 +1,83 @@
-# Signal CLI REST API Dependency Installation and Build Tasks
+# Signal CLI REST API Dependency Installation and Build
+- name: Download and setup Signal CLI
+  shell: |
+    cd /tmp
+    wget https://github.com/AsamK/signal-cli/releases/download/v0.13.5/signal-cli-0.13.5.tar.gz
+    tar -C /opt -xzf signal-cli-0.13.5.tar.gz
+    ln -sf /opt/signal-cli-0.13.5/bin/signal-cli /usr/local/bin/signal-cli
+  args:
+    creates: /usr/local/bin/signal-cli
 
-# Clone signal-cli-rest-api repository
-- name: "Clone signal-cli-rest-api repository"
-  git:
-    repo: "https://github.com/bbernhard/signal-cli-rest-api.git"
-    dest: "{{ app_dir }}/signal-cli-rest-api-src"
-    version: "{{ signal_api_version | default('master') }}"
-    force: yes
-  become_user: "{{ app_user }}"
-
-# Download signal-cli
-- name: "Download signal-cli {{ signal_cli_version | default('0.13.5') }}"
-  get_url:
-    url: "https://github.com/AsamK/signal-cli/releases/download/v{{ signal_cli_version | default('0.13.5') }}/signal-cli-{{ signal_cli_version | default('0.13.5') }}.tar.gz"
-    dest: "/tmp/signal-cli-{{ signal_cli_version | default('0.13.5') }}.tar.gz"
-    mode: '0644'
-
-# Extract signal-cli
-- name: "Extract signal-cli"
-  unarchive:
-    src: "/tmp/signal-cli-{{ signal_cli_version | default('0.13.5') }}.tar.gz"
-    dest: "/opt/signal-api"
-    remote_src: yes
+- name: Create Signal API data directory
+  file:
+    path: "/opt/signal-api/data"
+    state: directory
     owner: "{{ app_user }}"
     group: "{{ app_user }}"
-    creates: "/opt/signal-api/signal-cli-{{ signal_cli_version | default('0.13.5') }}"
+    mode: '0755'
 
-# Create signal-cli symlink
-- name: "Create signal-cli symlink"
-  file:
-    src: "/opt/signal-api/signal-cli-{{ signal_cli_version | default('0.13.5') }}/bin/signal-cli"
-    dest: "/usr/local/bin/signal-cli"
-    state: link
+- name: Clean and clone Signal CLI REST API
+  shell: |
+    rm -rf {{ app_dir | basename }}
+    git clone https://github.com/bbernhard/signal-cli-rest-api.git {{ app_dir | basename }}
+  args:
+    chdir: /opt
+  become_user: "{{ app_user }}"
 
-# Set up Go environment and build REST API
-- name: "Initialize Go modules for signal-cli-rest-api"
+- name: Initialize Go modules
   shell: |
     export PATH=$PATH:/usr/local/go/bin
-    export JAVA_HOME="/usr/lib/jvm/java-{{ java_version | default('17') }}-openjdk-amd64"
     go mod tidy
   args:
-    chdir: "{{ app_dir }}/signal-cli-rest-api-src"
+    chdir: "{{ app_dir }}/src"
   become_user: "{{ app_user }}"
   environment:
     GOOS: linux
     GOARCH: amd64
 
-- name: "Download Go dependencies for signal-cli-rest-api"
+- name: Download Go dependencies
   shell: |
     export PATH=$PATH:/usr/local/go/bin
-    export JAVA_HOME="/usr/lib/jvm/java-{{ java_version | default('17') }}-openjdk-amd64"
     go mod download
   args:
-    chdir: "{{ app_dir }}/signal-cli-rest-api-src"
+    chdir: "{{ app_dir }}/src"
   become_user: "{{ app_user }}"
   environment:
     GOOS: linux
     GOARCH: amd64
 
-# Build signal-cli-rest-api
-- name: "Build signal-cli-rest-api"
+- name: Build Signal CLI REST API
   shell: |
     export PATH=$PATH:/usr/local/go/bin
-    export JAVA_HOME="/usr/lib/jvm/java-{{ java_version | default('17') }}-openjdk-amd64"
-    go build -o {{ app_service_name }} ./src
+    go build -o ../{{ app_service_name }} .
   args:
-    chdir: "{{ app_dir }}/signal-cli-rest-api-src"
+    chdir: "{{ app_dir }}/src"
   become_user: "{{ app_user }}"
   environment:
     GOOS: linux
     GOARCH: amd64
-    CGO_ENABLED: "1"  # Signal CLI REST API may need CGO
-  register: signal_api_build_result
+    CGO_ENABLED: "1"
+  register: build_result
 
-# Check build results
-- name: "Check signal-cli-rest-api build results"
+- name: Check build results
   fail:
-    msg: "Signal CLI REST API build failed: {{ signal_api_build_result.stderr }}"
-  when: signal_api_build_result.failed | default(false)
+    msg: "Build failed for {{ service_name }}: {{ build_result.stderr }}"
+  when: build_result.failed | default(false)
 
-# Move binary to app directory
-- name: "Move signal-cli-rest-api binary to app directory"
-  copy:
-    src: "{{ app_dir }}/signal-cli-rest-api-src/{{ app_service_name }}"
-    dest: "{{ app_dir }}/{{ app_service_name }}"
-    remote_src: yes
-    owner: "{{ app_user }}"
-    group: "{{ app_user }}"
-    mode: '0755'
-
-# Copy static files (if any)
-- name: "Copy static files and templates"
-  copy:
-    src: "{{ app_dir }}/signal-cli-rest-api-src/{{ item }}"
-    dest: "{{ app_dir }}/{{ item }}"
-    remote_src: yes
-    owner: "{{ app_user }}"
-    group: "{{ app_user }}"
-  with_items:
-    - "index.html"
-    - "doc"
-  ignore_errors: yes  # These files may not exist in all versions
-
-# Create wrapper script for different modes
-- name: "Create signal-cli-rest-api wrapper script"
-  template:
-    src: signal-api-wrapper.sh.j2
-    dest: "{{ app_dir }}/signal-api-wrapper.sh"
-    owner: "{{ app_user }}"
-    group: "{{ app_user }}"
-    mode: '0755'
-
-# Verify binary was created
-- name: "Verify signal-cli-rest-api binary was created"
+- name: Verify binary was created
   stat:
     path: "{{ app_dir }}/{{ app_service_name }}"
-  register: signal_api_binary
+  register: binary_check
 
-- name: "Verify signal-cli binary is accessible"
-  stat:
-    path: "/usr/local/bin/signal-cli"
-  register: signal_cli_binary
-
-# Display build success
-- name: "Display build success"
-  debug:
-    msg: |
-      Signal CLI REST API built successfully: {{ app_dir }}/{{ app_service_name }}
-      Signal CLI available at: /usr/local/bin/signal-cli
-      Data directory: /opt/signal-api/data
-      Mode: {{ ansible_env.MODE | default('normal') }}
-  when: 
-    - signal_api_binary.stat.exists
-    - signal_cli_binary.stat.exists
-
-# Clean up source directory (optional)
-- name: "Clean up source directory"
+- name: Ensure binary is executable
   file:
-    path: "{{ app_dir }}/signal-cli-rest-api-src"
-    state: absent
-  when: cleanup_source | default(false)
+    path: "{{ app_dir }}/{{ app_service_name }}"
+    mode: '0755'
+    owner: "{{ app_user }}"
+    group: "{{ app_user }}"
+  when: binary_check.stat.exists
+
+- name: Display build success
+  debug:
+    msg: "Signal CLI REST API built successfully: {{ app_dir }}/{{ app_service_name }}"
+  when: binary_check.stat.exists

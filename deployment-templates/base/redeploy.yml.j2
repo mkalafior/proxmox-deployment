@@ -10,7 +10,6 @@
     - service-config.yml
   
   vars:
-    health_check_path: "/health"
     # Secure temporary directory (replaces /tmp usage)
     secure_temp_dir: "{{ playbook_dir }}/../.secure_temp/{{ service_name }}_{{ ansible_date_time.epoch }}_{{ ansible_pid | default(9999) }}"
   
@@ -164,6 +163,8 @@
   vars:
     # Use shared secure temp directory from first play
     secure_temp_dir: "{{ hostvars['localhost']['shared_secure_temp_dir'] }}"
+    # Fix Ansible remote_tmp warnings by using system /tmp
+    ansible_remote_tmp: /tmp
   
   tasks:
     - name: Wait for system to be ready

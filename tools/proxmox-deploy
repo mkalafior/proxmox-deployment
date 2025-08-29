@@ -552,9 +552,9 @@ except:
       service_type=$(grep -E '^service_type:' "$svc_dir/service-config.yml" | awk -F: '{print $2}' | xargs || true)
     fi
     
-    if [[ ! "$service_type" =~ ^(nodejs|python|golang|static)$ ]]; then
+    if [[ ! "$service_type" =~ ^(nodejs|python|golang|static|signal-api)$ ]]; then
       echo "❌ Service type '$service_type' does not support code redeployment"
-      echo "   Supported types: nodejs, python, golang, static"
+      echo "   Supported types: nodejs, python, golang, static, signal-api"
       exit 1
     fi
     

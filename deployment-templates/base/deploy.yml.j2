@@ -171,6 +171,8 @@
     # Use shared secure temp directory from first play
     secure_temp_dir: "{{ hostvars['localhost']['shared_secure_temp_dir'] }}"
     ansible_ssh_common_args: '-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null'
+    # Fix Ansible remote_tmp warnings by using system /tmp
+    ansible_remote_tmp: /tmp
   
   tasks:
     - name: Wait for system to be ready
@@ -521,6 +523,7 @@
         url: "http://{{ ansible_host }}:{{ app_port }}{{ health_check_path | default('/health') }}"
         method: GET
         timeout: 10
+        status_code: [200, 204]
       register: health_check
       ignore_errors: yes
       when: service_type != 'database'

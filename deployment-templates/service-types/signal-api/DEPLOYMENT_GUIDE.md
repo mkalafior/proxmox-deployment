@@ -6,11 +6,12 @@ This service type provides a complete deployment solution for the Signal CLI RES
 
 ### ✅ Complete Signal CLI REST API Stack
 - **Signal CLI**: Latest version (configurable) with Java runtime
-- **REST API**: Go-based wrapper providing HTTP endpoints
+- **REST API**: Full Signal CLI REST API from GitHub repository
 - **Multiple Modes**: Support for normal, native, and json-rpc execution modes
 - **Systemd Integration**: Native service management with proper logging
 - **Health Monitoring**: Comprehensive health checks and monitoring
 - **Data Persistence**: Signal configuration persists across deployments
+- **No Starter Files**: Deploys the complete Signal CLI REST API directly
 
 ### ✅ Key Features Replicated from Docker
 - Multi-stage build process (runtime + dependency installation)
