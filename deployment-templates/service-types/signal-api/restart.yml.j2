@@ -1,0 +1,56 @@
+# Signal CLI REST API Restart Tasks
+
+- name: "Stop {{ service_name }} service"
+  systemd:
+    name: "{{ app_service_name }}"
+    state: stopped
+  register: service_stop_result
+  ignore_errors: true
+
+- name: "Wait for service to stop"
+  wait_for:
+    port: "{{ app_port | default('8080') }}"
+    host: "{{ ansible_default_ipv4.address }}"
+    state: stopped
+    timeout: 30
+  ignore_errors: true
+
+- name: "Start {{ service_name }} service"
+  systemd:
+    name: "{{ app_service_name }}"
+    state: started
+    enabled: yes
+    daemon_reload: yes
+
+- name: "Wait for service to start"
+  wait_for:
+    port: "{{ app_port | default('8080') }}"
+    host: "{{ ansible_default_ipv4.address }}"
+    delay: 5
+    timeout: 60
+
+- name: "Verify service is running"
+  systemd:
+    name: "{{ app_service_name }}"
+  register: service_status
+
+- name: "Basic connectivity check after restart"
+  uri:
+    url: "http://{{ ansible_default_ipv4.address }}:{{ app_port | default('8080') }}/"
+    method: GET
+    timeout: 10
+    status_code: [200, 404, 405]
+  register: restart_connectivity_check
+  retries: 3
+  delay: 5
+  ignore_errors: true
+
+- name: "Display restart results"
+  debug:
+    msg: |
+      Signal API Restart Results:
+      ==========================
+      Service stopped: {{ 'Success' if not service_stop_result.failed else 'Failed' }}
+      Service started: {{ 'Success' if service_status.status.ActiveState == 'active' else 'Failed' }}
+      Port accessible: {{ 'Yes' if not restart_connectivity_check.failed else 'No' }}
+      Status: {{ service_status.status.ActiveState | default('unknown') }}

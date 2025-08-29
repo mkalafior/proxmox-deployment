@@ -27,7 +27,7 @@ TEMPLATES_BASE="${TEMPLATES_ROOT}/deployment-templates"
 TARGET_PROJECT_ROOT="${PROJECT_ROOT_OVERRIDE:-${TEMPLATES_ROOT}}"
 
 # Available service types
-AVAILABLE_TYPES=(nodejs python golang database static tor-proxy)
+AVAILABLE_TYPES=(nodejs python golang database static tor-proxy signal-api)
 
 # Default values
 DEFAULT_VM_CORES=2
@@ -473,7 +473,7 @@ EOF
     fi
     
     # Generate redeploy.yml using Python template merger (for code-based services)
-    if [[ "$SERVICE_TYPE" =~ ^(nodejs|python|golang|static)$ ]]; then
+    if [[ "$SERVICE_TYPE" =~ ^(nodejs|python|golang|static|signal-api)$ ]]; then
         local redeploy_template="$TEMPLATES_BASE/base/redeploy.yml.j2"
         if [[ -f "$redeploy_template" && -f "$merge_script" ]]; then
             if python3 "$merge_script" "$redeploy_template" "$TEMPLATES_BASE/service-types/$SERVICE_TYPE" "$DEPLOYMENT_DIR/redeploy.yml" "$SERVICE_NAME"; then
@@ -574,7 +574,7 @@ EOF
     log_info "Created deploy.sh"
     
     # Create redeploy.sh script (for code-based services only)
-    if [[ "$SERVICE_TYPE" =~ ^(nodejs|python|golang|static)$ ]]; then
+    if [[ "$SERVICE_TYPE" =~ ^(nodejs|python|golang|static|signal-api)$ ]]; then
         cat > "$DEPLOYMENT_DIR/redeploy.sh" << 'EOF'
 #!/bin/bash
 set -euo pipefail
@@ -666,7 +666,7 @@ main() {
     echo "🚀 Next steps:"
     echo "   1. Customize service code: $SERVICE_DIR"
     echo "   2. Deploy: pxdcli deploy $SERVICE_NAME"
-    if [[ "$SERVICE_TYPE" =~ ^(nodejs|python|golang|static)$ ]]; then
+    if [[ "$SERVICE_TYPE" =~ ^(nodejs|python|golang|static|signal-api)$ ]]; then
         echo "   3. Redeploy code changes: pxdcli redeploy $SERVICE_NAME"
     fi
 }

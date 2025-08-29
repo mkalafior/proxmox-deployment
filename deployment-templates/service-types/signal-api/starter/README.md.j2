@@ -1,0 +1,84 @@
+# Signal CLI REST API - {{ service_name }}
+
+This is a Signal CLI REST API service deployed using the signal-api service type.
+
+## Service Information
+
+- **Service Name**: {{ service_name }}
+- **Port**: {{ app_port | default('8080') }}
+- **Mode**: normal (configurable via environment)
+- **Data Directory**: /opt/signal-api/data
+- **User**: appuser
+
+## Getting Started
+
+### 1. Register a Phone Number
+
+First, you need to register a phone number with Signal:
+
+```bash
+curl -X POST "http://{{ service_hostname }}:{{ app_port | default('8080') }}/v1/register" \
+  -H "Content-Type: application/json" \
+  -d '{"number": "+1234567890"}'
+```
+
+### 2. Verify the Number
+
+You'll receive an SMS with a verification code:
+
+```bash
+curl -X POST "http://{{ service_hostname }}:{{ app_port | default('8080') }}/v1/verify" \
+  -H "Content-Type: application/json" \
+  -d '{"number": "+1234567890", "code": "123456"}'
+```
+
+### 3. Send a Test Message
+
+```bash
+curl -X POST "http://{{ service_hostname }}:{{ app_port | default('8080') }}/v2/send" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "message": "Hello from Signal API!",
+    "number": "+1234567890",
+    "recipients": ["+0987654321"]
+  }'
+```
+
+## API Documentation
+
+- **Swagger UI**: http://{{ service_hostname }}:{{ app_port | default('8080') }}/
+- **Health Check**: http://{{ service_hostname }}:{{ app_port | default('8080') }}/v1/health
+
+## Service Management
+
+```bash
+# Check service status
+sudo systemctl status {{ service_name }}
+
+# View logs
+sudo journalctl -u {{ service_name }} -f
+
+# Restart service
+sudo systemctl restart {{ service_name }}
+```
+
+## Configuration
+
+Environment variables can be set in the systemd service file:
+- `MODE`: normal, native, or json-rpc
+- `PORT`: Service port (default: 8080)
+- `LOG_LEVEL`: debug, info, warn, error
+- `AUTO_RECEIVE_SCHEDULE`: Cron format for auto-receive
+
+## Data Persistence
+
+Signal configuration and data is stored in `/opt/signal-api/data` and persists across deployments.
+
+## Troubleshooting
+
+1. **Service won't start**: Check logs with `journalctl -u {{ service_name }}`
+2. **Can't register number**: Ensure the phone number is in international format
+3. **API not responding**: Check if the port is accessible and firewall settings
+4. **Signal CLI errors**: Verify Java installation and signal-cli binary
+
+For more information, visit: https://github.com/bbernhard/signal-cli-rest-api

@@ -1,0 +1,44 @@
+[Unit]
+Description=Signal CLI REST API - {{ service_name }}
+After=network.target
+Wants=network.target
+
+[Service]
+Type=simple
+User={{ app_user }}
+Group={{ app_user }}
+WorkingDirectory={{ app_dir }}
+ExecStart={{ app_dir }}/signal-api-wrapper.sh
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+# Environment variables
+Environment="SIGNAL_CLI_CONFIG_DIR=/opt/signal-api/data"
+Environment="MODE={{ ansible_env.MODE | default('normal') }}"
+Environment="PORT={{ app_port | default('8080') }}"
+Environment="LOG_LEVEL={{ ansible_env.LOG_LEVEL | default('info') }}"
+Environment="JAVA_HOME=/usr/lib/jvm/java-{{ java_version | default('17') }}-openjdk-amd64"
+Environment="PATH=/usr/local/go/bin:/usr/lib/jvm/java-{{ java_version | default('17') }}-openjdk-amd64/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+
+# Security settings
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/signal-api/data
+ReadWritePaths=/var/log
+
+# Resource limits
+LimitNOFILE=65536
+MemoryMax=1G
+
+# Auto-receive scheduling (if enabled)
+{% if ansible_env.AUTO_RECEIVE_SCHEDULE is defined and ansible_env.AUTO_RECEIVE_SCHEDULE != "" %}
+# Note: AUTO_RECEIVE_SCHEDULE should be handled by a separate cron job
+# This is just for reference: {{ ansible_env.AUTO_RECEIVE_SCHEDULE }}
+{% endif %}
+
+[Install]
+WantedBy=multi-user.target

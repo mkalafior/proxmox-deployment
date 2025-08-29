@@ -1,0 +1,49 @@
+# Signal CLI REST API Service Type Configuration
+service_type: signal-api
+runtime_name: "Signal CLI REST API"
+
+# Template parts provided by this service type
+provides_runtime_install: true
+provides_dependency_install: true
+provides_build_tasks: false
+provides_systemd_service: true
+provides_redeploy_tasks: true
+provides_health_check: true
+
+# File exclusions for tar archive
+file_exclusions:
+  - ".git"
+  - "deployment"
+  - "deployments"
+  - "*.log"
+  - ".env"
+  - "vendor"
+  - "*.exe"
+  - "signal-cli-config"
+  - "data"
+  - "tmp"
+
+# Default environment variables
+default_env:
+  MODE: "normal"  # Options: normal, native, json-rpc
+  PORT: "8080"
+  SIGNAL_CLI_CONFIG_DIR: "/opt/signal-api/data"
+  LOG_LEVEL: "info"
+  AUTO_RECEIVE_SCHEDULE: ""  # Cron format, e.g. "0 22 * * *"
+
+# Health check endpoint
+health_check_path: "/v1/health"
+
+# Default systemd service configuration
+systemd_service:
+  Type: simple
+  ExecStart: "{{ app_dir }}/{{ app_service_name }}"
+  Restart: always
+  RestartSec: 10
+  Environment: "SIGNAL_CLI_CONFIG_DIR=/opt/signal-api/data"
+  WorkingDirectory: "{{ app_dir }}"
+
+# Signal-specific configuration
+signal_cli_version: "0.13.5"  # Latest stable version
+graalvm_version: "22.3.0"     # For native compilation
+java_version: "17"            # Required Java version

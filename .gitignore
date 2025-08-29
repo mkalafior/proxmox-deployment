@@ -1,4 +1,5 @@
 .env.proxmox
+.env
 .idea
 .vscode
 .DS_Store

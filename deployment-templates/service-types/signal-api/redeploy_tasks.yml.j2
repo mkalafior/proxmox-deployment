@@ -1,0 +1,187 @@
+# Signal CLI REST API Redeployment Tasks
+
+- name: "Check if signal-cli-rest-api source has changed"
+  git:
+    repo: "https://github.com/bbernhard/signal-cli-rest-api.git"
+    dest: "{{ app_dir }}/signal-cli-rest-api-src"
+    version: "{{ signal_api_version | default('master') }}"
+    force: yes
+  become_user: "{{ app_user }}"
+  register: signal_api_source_update
+
+- name: "Check if signal-cli version needs update"
+  stat:
+    path: "/opt/signal-api/signal-cli-{{ signal_cli_version | default('0.13.5') }}"
+  register: signal_cli_current_version
+
+- name: "Determine if signal-cli needs update"
+  set_fact:
+    signal_cli_needs_update: "{{ not signal_cli_current_version.stat.exists }}"
+
+- name: "Download new signal-cli version if needed"
+  get_url:
+    url: "https://github.com/AsamK/signal-cli/releases/download/v{{ signal_cli_version | default('0.13.5') }}/signal-cli-{{ signal_cli_version | default('0.13.5') }}.tar.gz"
+    dest: "/tmp/signal-cli-{{ signal_cli_version | default('0.13.5') }}.tar.gz"
+    mode: '0644'
+  when: signal_cli_needs_update
+
+- name: "Extract new signal-cli version"
+  unarchive:
+    src: "/tmp/signal-cli-{{ signal_cli_version | default('0.13.5') }}.tar.gz"
+    dest: "/opt/signal-api"
+    remote_src: yes
+    owner: "{{ app_user }}"
+    group: "{{ app_user }}"
+  when: signal_cli_needs_update
+
+- name: "Update signal-cli symlink"
+  file:
+    src: "/opt/signal-api/signal-cli-{{ signal_cli_version | default('0.13.5') }}/bin/signal-cli"
+    dest: "/usr/local/bin/signal-cli"
+    state: link
+    force: yes
+  when: signal_cli_needs_update
+
+- name: "Check if Go modules changed"
+  stat:
+    path: "{{ app_dir }}/signal-cli-rest-api-src/go.mod"
+    checksum_algorithm: md5
+  register: new_go_mod
+
+- name: "Get previous go.mod checksum"
+  shell: |
+    if [ -f "{{ app_dir }}/.go.mod.checksum" ]; then
+      cat {{ app_dir }}/.go.mod.checksum
+    else
+      echo "none"
+    fi
+  register: old_go_mod_checksum
+  changed_when: false
+
+- name: "Determine if dependencies need update"
+  set_fact:
+    dependencies_changed: "{{ new_go_mod.stat.checksum != old_go_mod_checksum.stdout }}"
+
+- name: "Update Go dependencies if needed"
+  shell: |
+    export PATH=$PATH:/usr/local/go/bin
+    export JAVA_HOME="/usr/lib/jvm/java-{{ java_version | default('17') }}-openjdk-amd64"
+    go mod tidy
+    go mod download
+  args:
+    chdir: "{{ app_dir }}/signal-cli-rest-api-src"
+  become_user: "{{ app_user }}"
+  environment:
+    GOOS: linux
+    GOARCH: amd64
+  when: dependencies_changed or force_dependency_update | default(false) or signal_api_source_update.changed
+
+- name: "Stop signal-api service before rebuild"
+  systemd:
+    name: "{{ app_service_name }}"
+    state: stopped
+  ignore_errors: true
+
+- name: "Rebuild signal-cli-rest-api"
+  shell: |
+    export PATH=$PATH:/usr/local/go/bin
+    export JAVA_HOME="/usr/lib/jvm/java-{{ java_version | default('17') }}-openjdk-amd64"
+    go build -o {{ app_service_name }} ./src
+  args:
+    chdir: "{{ app_dir }}/signal-cli-rest-api-src"
+  become_user: "{{ app_user }}"
+  environment:
+    GOOS: linux
+    GOARCH: amd64
+    CGO_ENABLED: "1"
+  register: signal_api_rebuild_result
+  when: 
+    - skip_build | default(false) == false
+    - (dependencies_changed or force_rebuild | default(false) or signal_api_source_update.changed)
+
+- name: "Check rebuild results"
+  fail:
+    msg: "Signal CLI REST API rebuild failed: {{ signal_api_rebuild_result.stderr }}"
+  when:
+    - skip_build | default(false) == false
+    - signal_api_rebuild_result is defined
+    - signal_api_rebuild_result.failed | default(false)
+
+- name: "Move rebuilt binary to app directory"
+  copy:
+    src: "{{ app_dir }}/signal-cli-rest-api-src/{{ app_service_name }}"
+    dest: "{{ app_dir }}/{{ app_service_name }}"
+    remote_src: yes
+    owner: "{{ app_user }}"
+    group: "{{ app_user }}"
+    mode: '0755'
+  when: 
+    - skip_build | default(false) == false
+    - signal_api_rebuild_result is defined
+    - not signal_api_rebuild_result.failed
+
+- name: "Verify binary was created"
+  stat:
+    path: "{{ app_dir }}/{{ app_service_name }}"
+  register: signal_api_binary
+
+- name: "Update wrapper script"
+  template:
+    src: signal-api-wrapper.sh.j2
+    dest: "{{ app_dir }}/signal-api-wrapper.sh"
+    owner: "{{ app_user }}"
+    group: "{{ app_user }}"
+    mode: '0755'
+
+- name: "Start signal-api service"
+  systemd:
+    name: "{{ app_service_name }}"
+    state: started
+    enabled: yes
+    daemon_reload: yes
+
+- name: "Wait for service to be ready"
+  wait_for:
+    port: "{{ app_port | default('8080') }}"
+    host: "{{ ansible_default_ipv4.address }}"
+    delay: 5
+    timeout: 30
+  ignore_errors: true
+
+- name: "Run basic health check after redeploy"
+  uri:
+    url: "http://{{ ansible_default_ipv4.address }}:{{ app_port | default('8080') }}/"
+    method: GET
+    timeout: 10
+    status_code: [200, 404, 405]
+  register: redeploy_health_check
+  retries: 3
+  delay: 5
+  ignore_errors: true
+
+- name: "Save go.mod checksum"
+  shell: echo "{{ new_go_mod.stat.checksum }}" > {{ app_dir }}/.go.mod.checksum
+  when: dependencies_changed and new_go_mod.stat.exists
+
+- name: "Clean up source directory if requested"
+  file:
+    path: "{{ app_dir }}/signal-cli-rest-api-src"
+    state: absent
+  when: cleanup_source | default(false)
+
+- name: "Set redeploy status"
+  set_fact:
+    redeploy_completed: "{{ signal_api_binary.stat.exists | default(false) }}"
+    redeploy_health_ok: "{{ not redeploy_health_check.failed | default(false) }}"
+
+- name: "Display redeploy results"
+  debug:
+    msg: |
+      Signal CLI REST API Redeploy Results:
+      ====================================
+      Source updated: {{ 'Yes' if signal_api_source_update.changed else 'No' }}
+      Signal CLI updated: {{ 'Yes' if signal_cli_needs_update else 'No' }}
+      Dependencies updated: {{ 'Yes' if dependencies_changed else 'No' }}
+      Binary rebuilt: {{ 'Yes' if signal_api_rebuild_result is defined and not signal_api_rebuild_result.failed else 'No' }}
+      Service restarted: {{ 'Yes' if redeploy_completed else 'No' }}
+      Health check: {{ 'OK' if redeploy_health_ok else 'Failed' }}

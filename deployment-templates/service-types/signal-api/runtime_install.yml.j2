@@ -1,0 +1,92 @@
+# Signal CLI REST API Runtime Installation Tasks
+
+# Install Java/OpenJDK (required for signal-cli)
+- name: "Install OpenJDK {{ java_version | default('17') }}"
+  apt:
+    name:
+      - "openjdk-{{ java_version | default('17') }}-jdk"
+      - "openjdk-{{ java_version | default('17') }}-jre"
+    state: present
+  when: not internet_test.failed
+
+# Install Go runtime
+- name: "Install Go runtime"
+  shell: |
+    cd /tmp
+    wget https://go.dev/dl/go1.21.0.linux-amd64.tar.gz
+    tar -C /usr/local -xzf go1.21.0.linux-amd64.tar.gz
+    ln -sf /usr/local/go/bin/go /usr/local/bin/go
+  args:
+    creates: /usr/local/bin/go
+  when: not internet_test.failed
+
+# Install build dependencies
+- name: "Install build dependencies"
+  apt:
+    name:
+      - build-essential
+      - git
+      - wget
+      - curl
+      - unzip
+      - make
+      - gcc
+      - libc6-dev
+    state: present
+  when: not internet_test.failed
+
+# Install GraalVM (optional, for native mode)
+- name: "Download and install GraalVM (for native compilation)"
+  shell: |
+    cd /tmp
+    wget https://github.com/graalvm/graalvm-ce-builds/releases/download/vm-{{ graalvm_version | default('22.3.0') }}/graalvm-ce-java17-linux-amd64-{{ graalvm_version | default('22.3.0') }}.tar.gz
+    tar -C /opt -xzf graalvm-ce-java17-linux-amd64-{{ graalvm_version | default('22.3.0') }}.tar.gz
+    ln -sf /opt/graalvm-ce-java17-{{ graalvm_version | default('22.3.0') }}/bin/native-image /usr/local/bin/native-image
+  args:
+    creates: /usr/local/bin/native-image
+  when: 
+    - not internet_test.failed
+    - enable_native_mode | default(false)
+
+# Create signal-api data directory
+- name: "Create Signal API data directory"
+  file:
+    path: "/opt/signal-api/data"
+    state: directory
+    owner: "{{ app_user }}"
+    group: "{{ app_user }}"
+    mode: '0755'
+
+# Create signal-cli config directory
+- name: "Create signal-cli config directory"
+  file:
+    path: "/opt/signal-api/data/signal-cli"
+    state: directory
+    owner: "{{ app_user }}"
+    group: "{{ app_user }}"
+    mode: '0700'
+
+# Set Java environment
+- name: "Set JAVA_HOME environment"
+  lineinfile:
+    path: /etc/environment
+    line: 'JAVA_HOME="/usr/lib/jvm/java-{{ java_version | default("17") }}-openjdk-amd64"'
+    create: yes
+
+# Verify installations
+- name: "Verify Java installation"
+  shell: java -version
+  register: java_version_check
+  changed_when: false
+
+- name: "Verify Go installation"
+  shell: /usr/local/bin/go version
+  register: go_version_check
+  changed_when: false
+
+- name: "Display installation status"
+  debug:
+    msg: |
+      Java: {{ java_version_check.stderr.split('\n')[0] }}
+      Go: {{ go_version_check.stdout }}
+      Signal data directory: /opt/signal-api/data
