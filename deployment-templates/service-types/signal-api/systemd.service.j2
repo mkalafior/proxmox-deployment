@@ -7,15 +7,20 @@ Type=simple
 User={{ app_user }}
 Group={{ app_user }}
 WorkingDirectory={{ app_dir }}
-ExecStart={{ app_dir }}/{{ app_service_name }}
+ExecStart={{ app_dir }}/{{ app_service_name }} -signal-cli-config=/opt/signal-api/data
 Restart=always
 RestartSec=10
 Environment=SIGNAL_CLI_CONFIG_DIR=/opt/signal-api/data
-Environment=MODE=normal
+Environment=MODE={{ container_env.MODE | default('normal') }}
 {% if app_port is defined %}
 Environment=PORT={{ app_port }}
 {% endif %}
 Environment=HOST=0.0.0.0
+Environment=GIN_MODE=release
+Environment=LANG=en_US.UTF-8
+Environment=SIGNAL_CLI_UID=1000
+Environment=SIGNAL_CLI_GID=1000
+Environment=SIGNAL_CLI_REST_API_PLUGIN_SHARED_OBJ_DIR=/usr/bin/
 
 [Install]
 WantedBy=multi-user.target

@@ -1,20 +1,51 @@
 # Signal CLI REST API Runtime Installation
-- name: Install Java runtime
+- name: Install Java runtime and system dependencies
   apt:
     name:
-      - openjdk-17-jdk
-      - openjdk-17-jre
+      - openjdk-21-jdk
+      - openjdk-21-jre
+      - curl
+      - netcat-openbsd
+      - locales
+      - build-essential
+      - libz-dev
+      - zlib1g-dev
+      - wget
+      - unzip
+      - git
+      - file
+      - zip
+      - software-properties-common
+      - util-linux
     state: present
+  become: true
+
+- name: Configure UTF-8 locale
+  shell: |
+    sed -i -e 's/# en_US.UTF-8 UTF-8/en_US.UTF-8 UTF-8/' /etc/locale.gen
+    dpkg-reconfigure --frontend=noninteractive locales
+    update-locale LANG=en_US.UTF-8
+  environment:
+    DEBIAN_FRONTEND: noninteractive
   become: true
 
 - name: Install Go runtime
   shell: |
     cd /tmp
-    wget https://go.dev/dl/go1.21.0.linux-amd64.tar.gz
-    tar -C /usr/local -xzf go1.21.0.linux-amd64.tar.gz
+    wget https://go.dev/dl/go1.24.0.linux-amd64.tar.gz
+    tar -C /usr/local -xzf go1.24.0.linux-amd64.tar.gz
     ln -sf /usr/local/go/bin/go /usr/local/bin/go
   args:
     creates: /usr/local/bin/go
+  become: true
+
+- name: Install Swagger CLI (version will be set during dependency install)
+  shell: |
+    export PATH=$PATH:/usr/local/go/bin
+    # Default version, will be updated during dependency install if Dockerfile version differs
+    go install github.com/swaggo/swag/cmd/swag@v1.16.4
+  args:
+    creates: /root/go/bin/swag
   become: true
 
 

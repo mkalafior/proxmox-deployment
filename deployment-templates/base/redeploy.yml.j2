@@ -30,11 +30,11 @@
         that:
           - service_name is defined and service_name != ""
           - service_type is defined and service_type != ""
-          - service_type in ['nodejs', 'python', 'golang', 'static']
+          - service_type in ['nodejs', 'python', 'golang', 'static', 'signal-api']
         fail_msg: |
           Invalid service configuration for redeployment.
           Service type '{{ service_type | default('undefined') }}' is not supported for code redeployment.
-          Supported types: nodejs, python, golang, static
+          Supported types: nodejs, python, golang, static, signal-api
 
     - name: Debug redeployment info
       debug:

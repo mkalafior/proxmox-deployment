@@ -1,12 +1,104 @@
 # Signal CLI REST API Dependency Installation and Build
-- name: Download and setup Signal CLI
+
+- name: Clean and clone Signal CLI REST API
+  shell: |
+    # Handle Go module cache permissions issue
+    if [ -d "{{ app_dir | basename }}" ]; then
+      chmod -R u+w {{ app_dir | basename }} || true
+      rm -rf {{ app_dir | basename }}
+    fi
+    git clone https://github.com/bbernhard/signal-cli-rest-api.git {{ app_dir | basename }}
+  args:
+    chdir: /opt
+  become_user: "{{ app_user }}"
+
+- name: Extract all ARG variables from Dockerfile
+  shell: |
+    cd {{ app_dir }}
+    
+    # Extract ALL ARG variables from Dockerfile
+    SIGNAL_CLI_VERSION=$(grep "ARG SIGNAL_CLI_VERSION=" Dockerfile | cut -d'=' -f2)
+    LIBSIGNAL_CLIENT_VERSION=$(grep "ARG LIBSIGNAL_CLIENT_VERSION=" Dockerfile | cut -d'=' -f2)
+    SWAG_VERSION=$(grep "ARG SWAG_VERSION=" Dockerfile | cut -d'=' -f2)
+    GO_VERSION=$(grep "FROM golang:" Dockerfile | cut -d':' -f2 | cut -d'-' -f1)
+    
+    # Output as Ansible facts
+    echo "signal_cli_version: $SIGNAL_CLI_VERSION"
+    echo "libsignal_client_version: $LIBSIGNAL_CLIENT_VERSION"
+    echo "swag_version: $SWAG_VERSION"
+    echo "go_version: $GO_VERSION"
+  become_user: "{{ app_user }}"
+  register: dockerfile_args
+
+- name: Set extracted versions as facts
+  set_fact:
+    signal_cli_version: "{{ dockerfile_args.stdout_lines | select('match', '^signal_cli_version:') | first | regex_replace('^signal_cli_version: ', '') }}"
+    libsignal_client_version: "{{ dockerfile_args.stdout_lines | select('match', '^libsignal_client_version:') | first | regex_replace('^libsignal_client_version: ', '') }}"
+    swag_version: "{{ dockerfile_args.stdout_lines | select('match', '^swag_version:') | first | regex_replace('^swag_version: ', '') }}"
+    dockerfile_go_version: "{{ dockerfile_args.stdout_lines | select('match', '^go_version:') | first | regex_replace('^go_version: ', '') }}"
+
+- name: Display extracted versions
+  debug:
+    msg: |
+      Extracted from Dockerfile:
+      - Signal CLI: {{ signal_cli_version }}
+      - libsignal-client: {{ libsignal_client_version }}
+      - Swagger: {{ swag_version }}
+      - Go: {{ dockerfile_go_version }}
+
+- name: Download and setup Signal CLI using extracted version
   shell: |
     cd /tmp
-    wget https://github.com/AsamK/signal-cli/releases/download/v0.13.5/signal-cli-0.13.5.tar.gz
-    tar -C /opt -xzf signal-cli-0.13.5.tar.gz
-    ln -sf /opt/signal-cli-0.13.5/bin/signal-cli /usr/local/bin/signal-cli
+    wget https://github.com/AsamK/signal-cli/releases/download/v{{ signal_cli_version }}/signal-cli-{{ signal_cli_version }}.tar.gz
+    tar -C /tmp -xzf signal-cli-{{ signal_cli_version }}.tar.gz
+  args:
+    creates: /tmp/signal-cli-{{ signal_cli_version }}
+
+- name: Apply Signal-Android version fix using Dockerfile logic
+  shell: |
+    cd /tmp/signal-cli-{{ signal_cli_version }}/lib
+    # Backup original jar
+    cp signal-cli-{{ signal_cli_version }}.jar signal-cli-{{ signal_cli_version }}.jar.backup
+    # Extract jar contents
+    unzip signal-cli-{{ signal_cli_version }}.jar
+    # Apply Signal-Android version fix (same as Dockerfile)
+    sed -i 's/Signal-Android\/5.22.3/Signal-Android\/5.51.7/g' org/asamk/signal/BaseConfig.class
+    # Repack jar with fix
+    zip -r signal-cli-{{ signal_cli_version }}.jar org/ META-INF/
+    # Clean up extracted files
+    rm -rf org/ META-INF/
+  args:
+    creates: /tmp/signal-cli-{{ signal_cli_version }}/lib/signal-cli-{{ signal_cli_version }}.jar.backup
+
+- name: Copy libsignal native library from cloned repository (x86_64)
+  copy:
+    src: "{{ app_dir }}/ext/libraries/libsignal-client/v{{ libsignal_client_version }}/x86-64/libsignal_jni.so"
+    dest: "/tmp/libsignal_jni.so"
+    remote_src: true
+    mode: '0644'
+  when: ansible_architecture == "x86_64"
+  become_user: "{{ app_user }}"
+
+- name: Patch libsignal-client jar with native library
+  shell: |
+    cd /tmp
+    # Check if libsignal jar exists and patch it
+    if [ -f "/tmp/signal-cli-{{ signal_cli_version }}/lib/libsignal-client-{{ libsignal_client_version }}.jar" ]; then
+      zip -qu /tmp/signal-cli-{{ signal_cli_version }}/lib/libsignal-client-{{ libsignal_client_version }}.jar libsignal_jni.so
+      echo "Patched libsignal-client jar with native library"
+    else
+      echo "libsignal-client jar not found, skipping patch"
+    fi
+  when: ansible_architecture == "x86_64"
+
+- name: Install patched Signal CLI to system
+  shell: |
+    cp -r /tmp/signal-cli-{{ signal_cli_version }} /opt/
+    ln -sf /opt/signal-cli-{{ signal_cli_version }}/bin/signal-cli /usr/local/bin/signal-cli
   args:
     creates: /usr/local/bin/signal-cli
+
+# Locale setup is handled in runtime_install.yml.j2
 
 - name: Create Signal API data directory
   file:
@@ -16,13 +108,13 @@
     group: "{{ app_user }}"
     mode: '0755'
 
-- name: Clean and clone Signal CLI REST API
-  shell: |
-    rm -rf {{ app_dir | basename }}
-    git clone https://github.com/bbernhard/signal-cli-rest-api.git {{ app_dir | basename }}
-  args:
-    chdir: /opt
-  become_user: "{{ app_user }}"
+- name: Set proper ownership of signal-cli config directory (matching Docker entrypoint)
+  file:
+    path: "/opt/signal-api/data"
+    owner: "{{ app_user }}"
+    group: "{{ app_user }}"
+    recurse: yes
+    state: directory
 
 - name: Initialize Go modules
   shell: |
@@ -37,7 +129,7 @@
 
 - name: Download Go dependencies
   shell: |
-    export PATH=$PATH:/usr/local/go/bin
+    export PATH=$PATH:/usr/local/go/bin:/root/go/bin
     go mod download
   args:
     chdir: "{{ app_dir }}/src"
@@ -45,6 +137,32 @@
   environment:
     GOOS: linux
     GOARCH: amd64
+
+- name: Create Go workspace directories
+  file:
+    path: "/home/{{ app_user }}/go/bin"
+    state: directory
+    owner: "{{ app_user }}"
+    group: "{{ app_user }}"
+    mode: '0755'
+  become: true
+
+- name: Install correct Swagger version from Dockerfile
+  shell: |
+    export PATH=$PATH:/usr/local/go/bin
+    export GOPATH=/home/{{ app_user }}/go
+    go install github.com/swaggo/swag/cmd/swag@v{{ swag_version }}
+  become_user: "{{ app_user }}"
+
+- name: Generate Swagger documentation
+  shell: |
+    export PATH=$PATH:/usr/local/go/bin:/home/{{ app_user }}/go/bin
+    export GOPATH=/home/{{ app_user }}/go
+    /home/{{ app_user }}/go/bin/swag init
+  args:
+    chdir: "{{ app_dir }}/src"
+  become_user: "{{ app_user }}"
+  register: swagger_result
 
 - name: Build Signal CLI REST API
   shell: |
@@ -58,6 +176,16 @@
     GOARCH: amd64
     CGO_ENABLED: "1"
   register: build_result
+
+- name: Run Go tests
+  shell: |
+    export PATH=$PATH:/usr/local/go/bin
+    go test ./client -v
+  args:
+    chdir: "{{ app_dir }}/src"
+  become_user: "{{ app_user }}"
+  register: test_result
+  ignore_errors: true
 
 - name: Check build results
   fail:
@@ -76,6 +204,100 @@
     owner: "{{ app_user }}"
     group: "{{ app_user }}"
   when: binary_check.stat.exists
+
+- name: Build jsonrpc2-helper for JSON-RPC mode support
+  shell: |
+    export PATH=$PATH:/usr/local/go/bin
+    go build -o jsonrpc2-helper jsonrpc2-helper.go
+  args:
+    chdir: "{{ app_dir }}/src/scripts"
+  become_user: "{{ app_user }}"
+  register: jsonrpc2_build_result
+
+- name: Install jsonrpc2-helper to system path
+  copy:
+    src: "{{ app_dir }}/src/scripts/jsonrpc2-helper"
+    dest: "/usr/local/bin/jsonrpc2-helper"
+    mode: '0755'
+    remote_src: true
+  when: jsonrpc2_build_result is succeeded
+
+- name: Build plugin loader (matching Docker)
+  shell: |
+    export PATH=$PATH:/usr/local/go/bin
+    go build -buildmode=plugin -o signal-cli-rest-api_plugin_loader.so plugin_loader.go
+  args:
+    chdir: "{{ app_dir }}/src"
+  become_user: "{{ app_user }}"
+  register: plugin_build_result
+  ignore_errors: true
+
+- name: Install plugin loader to system path
+  copy:
+    src: "{{ app_dir }}/src/signal-cli-rest-api_plugin_loader.so"
+    dest: "/usr/bin/signal-cli-rest-api_plugin_loader.so"
+    mode: '0755'
+    remote_src: true
+  when: plugin_build_result is succeeded
+
+# Additional packages are handled in runtime_install.yml.j2
+
+- name: Install supervisor for JSON-RPC mode
+  apt:
+    name: supervisor
+    state: present
+  when: container_env.MODE is defined and container_env.MODE == "json-rpc"
+
+- name: Install netcat for JSON-RPC bridge
+  apt:
+    name: netcat-openbsd
+    state: present
+  when: container_env.MODE is defined and container_env.MODE == "json-rpc"
+
+- name: Create initial jsonrpc2.yml configuration for JSON-RPC mode
+  copy:
+    content: |
+      config:
+        <multi-account>:
+          tcp_port: 6001
+          fifo_pathname: /tmp/sigsocket1
+    dest: "/opt/signal-api/data/jsonrpc2.yml"
+    owner: "{{ app_user }}"
+    group: "{{ app_user }}"
+    mode: '0644'
+  when: container_env.MODE is defined and container_env.MODE == "json-rpc"
+
+- name: Create log directory for signal-cli JSON-RPC
+  file:
+    path: "/var/log/signal-cli-json-rpc-1"
+    state: directory
+    owner: "{{ app_user }}"
+    group: "{{ app_user }}"
+    mode: '0755'
+  when: container_env.MODE is defined and container_env.MODE == "json-rpc"
+
+- name: Run jsonrpc2-helper to setup JSON-RPC configuration and supervisor
+  shell: |
+    export SIGNAL_CLI_CONFIG_DIR=/opt/signal-api/data
+    /usr/local/bin/jsonrpc2-helper
+  become_user: "{{ app_user }}"
+  when: container_env.MODE is defined and container_env.MODE == "json-rpc"
+  notify: restart supervisor
+
+- name: Start and enable supervisor service
+  systemd:
+    name: supervisor
+    state: started
+    enabled: yes
+  when: container_env.MODE is defined and container_env.MODE == "json-rpc"
+
+- name: Start signal-cli JSON-RPC process via supervisor
+  shell: |
+    sleep 2
+    supervisorctl reread
+    supervisorctl update
+    supervisorctl start all
+  when: container_env.MODE is defined and container_env.MODE == "json-rpc"
 
 - name: Display build success
   debug:

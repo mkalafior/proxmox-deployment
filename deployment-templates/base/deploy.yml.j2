@@ -559,6 +559,10 @@
       systemd:
         name: privoxy
         state: restarted
+    - name: restart supervisor
+      systemd:
+        name: supervisor
+        state: restarted
 
 # Cleanup play - runs on localhost after deployment completes
 - name: Cleanup deployment artifacts
