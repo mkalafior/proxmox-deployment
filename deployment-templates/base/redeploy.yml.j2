@@ -187,6 +187,12 @@
       debug:
         msg: "Current service status: {{ current_service_status.status.ActiveState | default('unknown') }}"
 
+    - name: Cleanup old backups before creating new one (keep last 1)
+      shell: |
+        cd {{ app_dir | dirname }}
+        ls -dt {{ service_name }}-backup-* 2>/dev/null | tail -n +2 | xargs rm -rf
+      failed_when: false
+
     - name: Create backup directory
       file:
         path: "{{ app_dir }}-backup-{{ ansible_date_time.epoch }}"
@@ -309,12 +315,6 @@
           - Service Status: {{ final_service_status.status.ActiveState }}
           - Backup Location: {{ backup_dir.path }}
           - Health Check: {{ health_check_result.msg | default('Not performed') }}
-
-    - name: Cleanup old backups (keep last 1)
-      shell: |
-        cd {{ app_dir | dirname }}
-        ls -dt {{ service_name }}-backup-* 2>/dev/null | tail -n +2 | xargs rm -rf
-      failed_when: false
 
   handlers:
     - name: rollback on failure
