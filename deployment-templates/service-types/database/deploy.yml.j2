@@ -599,6 +599,13 @@
           pause:
             seconds: 5
             
+        - name: Cleanup old Cloudflare tunnel backups (keep last 1)
+          shell: |
+            cd /etc/cloudflared
+            ls -dt config.yml.backup.* 2>/dev/null | tail -n +2 | xargs rm -f
+          delegate_to: "{{ proxmox_host }}"
+          failed_when: false
+            
         - name: Create DNS route for tunnel
           shell: cloudflared tunnel route dns proxmox-main {{ app_subdomain }}.{{ cloudflare_domain }}
           delegate_to: "{{ proxmox_host }}"
